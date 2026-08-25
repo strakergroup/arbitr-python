@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import zipfile
 from collections.abc import Iterator
 from io import BytesIO
@@ -23,6 +24,8 @@ ENV = {
     "ARBITR_API_KEY": "py_test_cli",
     "ARBITR_BASE_URL": "https://api.test",
 }
+
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
 
 
 @pytest.fixture
@@ -173,9 +176,9 @@ def test_help_works_without_credentials(runner: CliRunner) -> None:
 
 
 def test_api_key_flag_is_not_accepted(runner: CliRunner) -> None:
-    result = runner.invoke(app, ["--api-key", "py_test_secret", "me"], env=ENV)
+    result = runner.invoke(app, ["--api-key", "py_test_secret", "me"], env=ENV, color=True)
     assert result.exit_code != 0
-    combined = f"{result.output}\n{result.stderr}"
+    combined = _ANSI_ESCAPE.sub("", f"{result.output}\n{result.stderr}")
     assert "No such option" in combined
     assert "--api-key" in combined
 
