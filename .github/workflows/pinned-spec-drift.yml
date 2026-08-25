@@ -1,0 +1,69 @@
+# Fail when the packaged OpenAPI pin lags deployed production.
+#
+# Pytest stays offline (httpx.MockTransport / respx). This job is the only
+# CI that fetches the public prod spec — GET /openapi.json, no API key.
+#
+# Does not run on pull_request: an unrelated PR must not go red because
+# prod shipped a new operation. Nightly + workflow_dispatch + pin-file
+# pushes to master are the signal.
+
+name: Pinned spec drift
+
+on:
+  schedule:
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - "src/arbitr/openapi.json"
+      - "src/arbitr/_spec.py"
+      - "scripts/check_pinned_spec.py"
+      - ".github/workflows/pinned-spec-drift.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    name: Live prod OpenAPI vs pin
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen
+      # Exit 1 is real drift (fail immediately). Exit 2 is unreadable prod
+      # (retry). Exit 3 is an unexpected script failure. Exit 4 is an
+      # unreadable packaged pin (fail immediately; not a prod flake).
+      - name: Compare pin to production OpenAPI
+        run: |
+          for attempt in 1 2 3; do
+            set +e
+            uv run python scripts/check_pinned_spec.py
+            status=$?
+            set -e
+            case "$status" in
+              0) exit 0 ;;
+              1)
+                echo "::error::Pinned OpenAPI drifted from production. Refresh src/arbitr/openapi.json, regenerate models, then update both clients."
+                exit 1
+                ;;
+              3)
+                echo "::error::Pinned spec check failed unexpectedly (exit 3). This is not drift."
+                exit 1
+                ;;
+              4)
+                echo "::error::Packaged OpenAPI pin could not be read (exit 4). This is not production drift."
+                exit 1
+                ;;
+            esac
+            echo "::warning::Could not read the production OpenAPI (exit $status), attempt $attempt of 3."
+            if [ "$attempt" -lt 3 ]; then
+              sleep $((attempt * 15))
+            fi
+          done
+          echo "::error::Could not read the production OpenAPI after 3 attempts. Drift is unknown, not ruled out."
+          exit 1

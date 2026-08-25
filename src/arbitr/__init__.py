@@ -10,7 +10,7 @@ from arbitr._constants import (
     TERMINAL_STATUSES,
 )
 from arbitr._projects import ProjectResumptionResponse
-from arbitr._spec import pinned_spec
+from arbitr._spec import OpenAPIDocumentError, pinned_spec
 from arbitr._version import __version__
 from arbitr.async_client import AsyncArbitrClient
 from arbitr.client import ArbitrClient, new_idempotency_key
@@ -91,6 +91,7 @@ __all__ = [
     "MeResponse",
     "MissingApiKeyError",
     "NotFoundError",
+    "OpenAPIDocumentError",
     "Page",
     "PaymentRequiredError",
     "ProjectDeliverableResponse",
