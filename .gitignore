@@ -1,0 +1,19 @@
+# Secrets — never commit API keys.
+.env
+.env.*
+!.env.example
+
+__pycache__/
+.venv/
+venv/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.hypothesis/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+.DS_Store

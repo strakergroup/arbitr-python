@@ -1,0 +1,32 @@
+name: Publish
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      # Required for PyPI trusted publishing — no API token is stored.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --frozen
+      - name: Tag matches the packaged version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(uv run python -c 'import arbitr; print(arbitr.__version__)')"
+          if [ "$tag" != "$pkg" ]; then
+            echo "release tag $tag does not match arbitr.__version__ $pkg" >&2
+            exit 1
+          fi
+      - run: uv build
+      - run: uv publish --trusted-publishing always
