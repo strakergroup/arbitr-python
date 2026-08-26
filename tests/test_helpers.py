@@ -4,21 +4,33 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from pydantic import BaseModel
 
 from arbitr import ArbitrClient, pinned_spec
 from arbitr._constants import ACTION_REQUIRED_STATUSES, TERMINAL_STATUSES
 from arbitr._coverage import OPERATION_METHODS
+from arbitr._datetime import UtcDatetime
 from arbitr._env import read_env_file
 from arbitr._files import load_upload_parts
 from arbitr._http import awrite_download_file, derive_ui_url, write_download_file
-from arbitr._projects import normalize_locale_code, project_submit_form
+from arbitr._projects import (
+    findings_list_params,
+    next_findings_after,
+    normalize_locale_code,
+    project_submit_form,
+)
 from arbitr._wait import decide_project_wait
-from arbitr.errors import BareLocaleCodeError, ClientInputError
+from arbitr.errors import BareLocaleCodeError, ClientInputError, FindingsKeysetError
 from arbitr.generated.models import ProjectResponse
 from payloads import project_json
+
+
+class _Timestamped(BaseModel):
+    at: UtcDatetime
 
 
 class TestDotenvParsing:
@@ -121,6 +133,71 @@ class TestLocaleNormalization:
             due_date=None,
         )
         assert "due_date" not in form
+
+
+class TestUtcDatetime:
+    """Every model timestamp goes through this, so the guarantee is one place."""
+
+    def test_naive_string_is_read_as_utc(self) -> None:
+        model = _Timestamped.model_validate({"at": "2026-08-20T00:05:55.093379"})
+        assert model.at == datetime(2026, 8, 20, 0, 5, 55, 93379, tzinfo=UTC)
+
+    def test_offset_string_is_converted_to_utc(self) -> None:
+        model = _Timestamped.model_validate({"at": "2026-08-20T12:05:55+12:00"})
+        assert model.at == datetime(2026, 8, 20, 0, 5, 55, tzinfo=UTC)
+
+    def test_result_is_always_comparable_to_an_aware_datetime(self) -> None:
+        model = _Timestamped.model_validate({"at": "2026-08-20T00:05:55"})
+        assert model.at < datetime(2030, 1, 1, tzinfo=UTC)
+
+
+class TestFindingsListParams:
+    def test_omits_none_and_never_sends_page(self) -> None:
+        params = findings_list_params(
+            limit=10, after=None, severity=None, category=None, status=None
+        )
+        assert params == {"limit": 10}
+        assert "page" not in params
+
+    def test_includes_seek_token_and_flag_filters(self) -> None:
+        params = findings_list_params(
+            limit=5,
+            after="0:0:flag-1",
+            severity="critical",
+            category="terminology",
+            status="open",
+        )
+        assert params == {
+            "limit": 5,
+            "after": "0:0:flag-1",
+            "severity": "critical",
+            "category": "terminology",
+            "status": "open",
+        }
+
+
+class TestNextFindingsAfter:
+    def test_stops_when_has_more_is_false(self) -> None:
+        assert next_findings_after(has_more=False, after="tok", previous=None) is None
+
+    def test_returns_the_new_token(self) -> None:
+        assert next_findings_after(has_more=True, after="tok-2", previous="tok-1") == "tok-2"
+
+    def test_raises_when_token_is_missing(self) -> None:
+        with pytest.raises(FindingsKeysetError, match="did not advance") as raised:
+            next_findings_after(has_more=True, after=None, previous=None)
+        assert raised.value.after is None
+        assert raised.value.previous is None
+
+    def test_raises_when_token_is_unchanged(self) -> None:
+        with pytest.raises(FindingsKeysetError, match="did not advance") as raised:
+            next_findings_after(has_more=True, after="tok", previous="tok")
+        assert raised.value.after == "tok"
+        assert raised.value.previous == "tok"
+
+    def test_raises_when_token_is_empty(self) -> None:
+        with pytest.raises(FindingsKeysetError, match="did not advance"):
+            next_findings_after(has_more=True, after="", previous=None)
 
 
 class TestLoadUploadParts:

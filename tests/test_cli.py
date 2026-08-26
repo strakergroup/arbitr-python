@@ -18,7 +18,14 @@ from typer.testing import CliRunner, Result
 import arbitr.cli as cli_module
 from arbitr import ArbitrClient
 from arbitr.cli import app
-from payloads import language_list_json, project_json
+from payloads import (
+    agent_finding_json,
+    chain_of_custody_json,
+    finding_list_json,
+    flag_finding_json,
+    language_list_json,
+    project_json,
+)
 
 ENV = {
     "ARBITR_API_KEY": "py_test_cli",
@@ -401,6 +408,89 @@ def test_deliverables_command(runner: CliRunner, api: respx.MockRouter) -> None:
     assert json.loads(result.output)["deliverables"][0]["id"] == "d-1"
 
 
+def test_findings_command(runner: CliRunner, api: respx.MockRouter) -> None:
+    api.get("/v1/projects/p/findings").respond(
+        200,
+        json=finding_list_json([flag_finding_json()], has_more=False),
+    )
+    result = runner.invoke(app, ["findings", "p"], env=ENV)
+    assert result.exit_code == 0
+    assert json.loads(result.output)["findings"][0]["id"] == "flag-1"
+
+
+def test_findings_all_walks_after(runner: CliRunner, api: respx.MockRouter) -> None:
+    # respx treats ``params=`` as a subset match, so ``{"limit": "1"}`` would also
+    # catch the follow-up ``after=`` request and ``--all`` would never stop.
+    pages = {
+        None: finding_list_json(
+            [flag_finding_json("flag-1")], has_more=True, limit=1, after="0:0:flag-1"
+        ),
+        "0:0:flag-1": finding_list_json([agent_finding_json("find-2")], has_more=False, limit=1),
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = request.url.params.get("after")
+        assert token in pages
+        return httpx.Response(200, json=pages[token])
+
+    api.get("/v1/projects/p/findings").mock(side_effect=handler)
+    result = runner.invoke(app, ["findings", "p", "--all", "--limit", "1"], env=ENV)
+    assert result.exit_code == 0
+    assert [item["id"] for item in json.loads(result.output)["findings"]] == ["flag-1", "find-2"]
+
+
+def test_findings_all_after_resumes_from_token(runner: CliRunner, api: respx.MockRouter) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params.get("after") == "0:0:flag-1"
+        return httpx.Response(
+            200,
+            json=finding_list_json([agent_finding_json("find-2")], has_more=False, limit=1),
+        )
+
+    api.get("/v1/projects/p/findings").mock(side_effect=handler)
+    result = runner.invoke(
+        app, ["findings", "p", "--all", "--after", "0:0:flag-1", "--limit", "1"], env=ENV
+    )
+    assert result.exit_code == 0
+    assert [item["id"] for item in json.loads(result.output)["findings"]] == ["find-2"]
+
+
+def test_findings_rejects_out_of_range_limit(runner: CliRunner) -> None:
+    """The spec caps limit at 200; reject locally instead of spending a 422."""
+    result = runner.invoke(app, ["findings", "p", "--limit", "500"], env=ENV)
+    assert result.exit_code == 2
+    assert "200" in _ANSI_ESCAPE.sub("", f"{result.output}\n{result.stderr}")
+
+
+def test_findings_rejects_unknown_severity(runner: CliRunner) -> None:
+    result = runner.invoke(app, ["findings", "p", "--severity", "urgent"], env=ENV)
+    assert result.exit_code == 2
+    combined = _ANSI_ESCAPE.sub("", f"{result.output}\n{result.stderr}")
+    assert "critical" in combined
+
+
+def test_findings_sends_enum_filters_as_plain_strings(
+    runner: CliRunner, api: respx.MockRouter
+) -> None:
+    route = api.get("/v1/projects/p/findings").respond(
+        200, json=finding_list_json([flag_finding_json()])
+    )
+    result = runner.invoke(
+        app, ["findings", "p", "--severity", "critical", "--status", "open"], env=ENV
+    )
+    assert result.exit_code == 0
+    params = route.calls.last.request.url.params
+    assert params.get("severity") == "critical"
+    assert params.get("status") == "open"
+
+
+def test_chain_of_custody_command(runner: CliRunner, api: respx.MockRouter) -> None:
+    api.get("/v1/projects/p/chain-of-custody").respond(200, json=chain_of_custody_json("p"))
+    result = runner.invoke(app, ["chain-of-custody", "p"], env=ENV)
+    assert result.exit_code == 0
+    assert json.loads(result.output)["created_via"] == "api"
+
+
 def test_projects_all_follows_pagination(runner: CliRunner, api: respx.MockRouter) -> None:
     api.get("/v1/projects", params={"page": "1"}).respond(
         200,
@@ -419,6 +509,19 @@ def test_projects_all_follows_pagination(runner: CliRunner, api: respx.MockRoute
     result = runner.invoke(app, ["projects", "--all"], env=ENV)
     assert result.exit_code == 0
     assert [p["id"] for p in json.loads(result.output)["projects"]] == ["p1", "p2"]
+
+
+def test_projects_all_page_resumes_from_page(runner: CliRunner, api: respx.MockRouter) -> None:
+    api.get("/v1/projects", params={"page": "2"}).respond(
+        200,
+        json={
+            "projects": [project_json("p2")],
+            "page": {"number": 2, "has_more": False, "limit": 50},
+        },
+    )
+    result = runner.invoke(app, ["projects", "--all", "--page", "2"], env=ENV)
+    assert result.exit_code == 0
+    assert [p["id"] for p in json.loads(result.output)["projects"]] == ["p2"]
 
 
 def test_projects_all_honours_limit(runner: CliRunner, api: respx.MockRouter) -> None:

@@ -205,6 +205,18 @@ class ProjectWaitTimeoutError(ArbitrClientError, TimeoutError):
         self.timeout = timeout
 
 
+class FindingsKeysetError(ArbitrClientError):
+    """GET .../findings reported another page but ``page.after`` did not advance."""
+
+    def __init__(self, *, after: str | None, previous: str | None) -> None:
+        super().__init__(
+            "listProjectFindings: page.has_more is true but page.after "
+            f"did not advance (after={after!r}, previous={previous!r})"
+        )
+        self.after = after
+        self.previous = previous
+
+
 class ResponseParseError(ArbitrClientError):
     """A 2xx JSON body did not match the published response schema."""
 

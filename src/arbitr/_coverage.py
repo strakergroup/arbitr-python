@@ -32,6 +32,8 @@ OPERATION_METHODS: dict[str, str] = {
     "getProject": "projects.get",
     "listDeliverables": "projects.deliverables",
     "getDeliverable": "projects.deliverable",
+    "listProjectFindings": "projects.findings",
+    "getProjectChainOfCustody": "projects.chain_of_custody",
     "createProjectResumption": "projects.resume",
     "createReviewResumption": "projects.resume_human_review",
     "listLanguages": "languages.list",

@@ -42,15 +42,23 @@ from arbitr._locales import filter_language_list, language_bcp47_set, resolve_lo
 from arbitr._parse import decode_json_body, parse_response
 from arbitr._projects import (
     ProjectResumptionResponse,
+    findings_list_params,
     idempotency_headers,
+    next_findings_after,
     project_list_params,
     project_submit_form,
 )
 from arbitr._version import __version__ as _version
 from arbitr._wait import decide_project_wait, parse_on_action_required
 from arbitr.generated.models import (
+    AgentFinding,
+    ChainOfCustodyResponse,
     CreditBalanceResponse,
     DeliverableListResponse,
+    FindingListResponse,
+    FindingSeverity,
+    FindingStatus,
+    FlagFinding,
     HumanReviewResponse,
     LanguageListResponse,
     MeResponse,
@@ -186,7 +194,7 @@ class ArbitrClient:
 
 
 class ProjectsAPI:
-    """Project lifecycle: submit, list/poll, deliverables, resumptions."""
+    """Project lifecycle: submit, list/poll, findings, chain of custody, deliverables."""
 
     def __init__(self, client: ArbitrClient) -> None:
         self._c = client
@@ -254,11 +262,15 @@ class ProjectsAPI:
         self,
         *,
         limit: int = 50,
+        page: int = 1,
         modified_after: str | None = None,
         status: str | None = None,
     ) -> Iterator[ProjectResponse]:
-        """Yield every project, following page-number pagination."""
-        page_number = 1
+        """Yield every project, following page-number pagination.
+
+        Pass ``page`` to resume from a page other than the first.
+        """
+        page_number = page
         while True:
             body = self.list(
                 limit=limit,
@@ -313,6 +325,76 @@ class ProjectsAPI:
             if remaining <= 0:
                 raise err.ProjectWaitTimeoutError(project_id, decision.status, timeout)
             time.sleep(min(poll_interval, remaining))
+
+    def findings(
+        self,
+        project_id: str,
+        *,
+        limit: int = 50,
+        after: str | None = None,
+        severity: FindingSeverity | str | None = None,
+        category: str | None = None,
+        status: FindingStatus | str | None = None,
+    ) -> FindingListResponse:
+        """One page of segment flags and agent findings (GET …/findings).
+
+        Walk ``page.after`` as ``after=`` until ``page.has_more`` is false.
+        ``severity``, ``category``, and ``status`` filter flags only.
+        """
+        return parse_response(
+            FindingListResponse,
+            self._c.get_json(
+                f"/v1/projects/{project_id}/findings",
+                params=findings_list_params(
+                    limit=limit,
+                    after=after,
+                    severity=severity,
+                    category=category,
+                    status=status,
+                ),
+            ),
+            operation="listProjectFindings",
+        )
+
+    def iterate_findings(
+        self,
+        project_id: str,
+        *,
+        limit: int = 50,
+        after: str | None = None,
+        severity: FindingSeverity | str | None = None,
+        category: str | None = None,
+        status: FindingStatus | str | None = None,
+    ) -> Iterator[FlagFinding | AgentFinding]:
+        """Yield every finding, following ``page.after`` keyset pagination.
+
+        Pass ``after`` to resume from a previous page's seek token.
+        """
+        while True:
+            body = self.findings(
+                project_id,
+                limit=limit,
+                after=after,
+                severity=severity,
+                category=category,
+                status=status,
+            )
+            yield from body.findings
+            after = next_findings_after(
+                has_more=body.page.has_more,
+                after=body.page.after,
+                previous=after,
+            )
+            if after is None:
+                return
+
+    def chain_of_custody(self, project_id: str) -> ChainOfCustodyResponse:
+        """Provenance record for a project (GET …/chain-of-custody)."""
+        return parse_response(
+            ChainOfCustodyResponse,
+            self._c.get_json(f"/v1/projects/{project_id}/chain-of-custody"),
+            operation="getProjectChainOfCustody",
+        )
 
     def deliverables(self, project_id: str) -> DeliverableListResponse:
         """List deliverable files (GET /v1/projects/{id}/deliverables)."""

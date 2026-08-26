@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import zipfile
+from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,8 @@ from arbitr import (
     BareLocaleCodeError,
     ClientInputError,
     DisallowedFileExtensionError,
+    FindingSeverity,
+    FindingsKeysetError,
     MissingApiKeyError,
     NotFoundError,
     ProjectWaitTimeoutError,
@@ -33,7 +36,16 @@ from arbitr import (
     ValidationError,
     new_idempotency_key,
 )
-from payloads import human_review_json, language_list_json, project_json, project_list_json
+from payloads import (
+    agent_finding_json,
+    chain_of_custody_json,
+    finding_list_json,
+    flag_finding_json,
+    human_review_json,
+    language_list_json,
+    project_json,
+    project_list_json,
+)
 
 
 def make_client(handler: Any) -> AsyncArbitrClient:
@@ -78,6 +90,19 @@ async def test_async_iterate_follows_page_numbers() -> None:
     async with make_client(handler) as client:
         ids = [p.id async for p in client.projects.iterate(limit=1)]
     assert ids == ["p1", "p2"]
+
+
+async def test_async_iterate_projects_resumes_from_page() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params.get("page") == "2"
+        return httpx.Response(
+            200,
+            json=project_list_json([project_json("p2")], number=2, has_more=False, limit=1),
+        )
+
+    async with make_client(handler) as client:
+        ids = [p.id async for p in client.projects.iterate(limit=1, page=2)]
+    assert ids == ["p2"]
 
 
 async def test_async_list_params() -> None:
@@ -308,6 +333,127 @@ async def test_async_deliverables_and_one_deliverable() -> None:
     assert [d.id for d in listed.deliverables] == ["d-1"]
     assert one.locale_code == "ko-kr"
     assert seen == ["/v1/projects/p/deliverables", "/v1/projects/p/deliverables/d-1"]
+
+
+async def test_async_findings_page_and_filters() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/projects/p/findings"
+        assert request.url.params.get("limit") == "10"
+        assert request.url.params.get("severity") == "critical"
+        assert "page" not in request.url.params
+        return httpx.Response(
+            200,
+            json=finding_list_json([flag_finding_json()], has_more=False, limit=10),
+        )
+
+    async with make_client(handler) as client:
+        body = await client.projects.findings("p", limit=10, severity=FindingSeverity.critical)
+    assert [item.kind for item in body.findings] == ["flag"]
+    assert body.page.number == 1
+
+
+async def test_async_iterate_findings_walks_after() -> None:
+    pages = {
+        None: finding_list_json(
+            [flag_finding_json("flag-1")], has_more=True, limit=1, after="0:0:flag-1"
+        ),
+        "0:0:flag-1": finding_list_json([agent_finding_json("find-2")], has_more=False, limit=1),
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = request.url.params.get("after")
+        assert token in pages
+        return httpx.Response(200, json=pages[token])
+
+    async with make_client(handler) as client:
+        kinds = [item.kind async for item in client.projects.iterate_findings("p", limit=1)]
+    assert kinds == ["flag", "agent_finding"]
+
+
+async def test_async_iterate_findings_continues_on_empty_page() -> None:
+    pages = {
+        None: finding_list_json([], has_more=True, limit=1, after="skip-1"),
+        "skip-1": finding_list_json([flag_finding_json("flag-1")], has_more=False, limit=1),
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = request.url.params.get("after")
+        assert token in pages
+        return httpx.Response(200, json=pages[token])
+
+    async with make_client(handler) as client:
+        ids = [item.id async for item in client.projects.iterate_findings("p", limit=1)]
+    assert ids == ["flag-1"]
+
+
+async def test_async_iterate_findings_resumes_from_after() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params.get("after") == "0:0:flag-1"
+        return httpx.Response(
+            200,
+            json=finding_list_json([agent_finding_json("find-2")], has_more=False, limit=1),
+        )
+
+    async with make_client(handler) as client:
+        kinds = [
+            item.kind
+            async for item in client.projects.iterate_findings("p", limit=1, after="0:0:flag-1")
+        ]
+    assert kinds == ["agent_finding"]
+
+
+async def test_async_iterate_findings_raises_when_after_does_not_advance() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json=finding_list_json(
+                [flag_finding_json("flag-1")], has_more=True, limit=1, after="same"
+            ),
+        )
+
+    async with make_client(handler) as client:
+        got: list[str] = []
+        with pytest.raises(FindingsKeysetError, match="did not advance"):
+            async for item in client.projects.iterate_findings("p", limit=1):
+                got.append(item.id)
+    assert got == ["flag-1", "flag-1"]
+
+
+async def test_async_iterate_findings_raises_when_has_more_without_after() -> None:
+    async with make_client(
+        lambda _r: httpx.Response(
+            200,
+            json=finding_list_json([flag_finding_json("flag-1")], has_more=True, limit=1),
+        )
+    ) as client:
+        got: list[str] = []
+        with pytest.raises(FindingsKeysetError, match="did not advance") as raised:
+            async for item in client.projects.iterate_findings("p"):
+                got.append(item.id)
+    assert got == ["flag-1"]
+    assert raised.value.after is None
+
+
+async def test_async_chain_of_custody() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/projects/p/chain-of-custody"
+        return httpx.Response(200, json=chain_of_custody_json("p"))
+
+    async with make_client(handler) as client:
+        body = await client.projects.chain_of_custody("p")
+    assert body.created_via == "api"
+    assert body.deliverables[0].id == "deliv-1"
+
+
+async def test_async_chain_of_custody_reads_naive_timestamps_as_utc() -> None:
+    payload = chain_of_custody_json("p")
+    payload["created_at"] = "2026-08-20T00:05:55.093379"
+    payload["deliverables"][0]["created_at"] = "2026-08-20T00:06:53.096363"
+
+    async with make_client(lambda _r: httpx.Response(200, json=payload)) as client:
+        body = await client.projects.chain_of_custody("p")
+    assert body.created_at == datetime(2026, 8, 20, 0, 5, 55, 93379, tzinfo=UTC)
+    assert body.deliverables[0].created_at.tzinfo is UTC
 
 
 async def test_async_download_zip(tmp_path: Path) -> None:

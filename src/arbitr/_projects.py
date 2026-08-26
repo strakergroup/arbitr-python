@@ -8,7 +8,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 
 from arbitr._constants import DEFAULT_WORKFLOW
-from arbitr.errors import BareLocaleCodeError, ClientInputError
+from arbitr.errors import BareLocaleCodeError, ClientInputError, FindingsKeysetError
 
 
 class ProjectResumptionResponse(BaseModel):
@@ -82,6 +82,50 @@ def project_list_params(
     if status:
         params["status"] = status
     return params
+
+
+def findings_list_params(
+    *,
+    limit: int,
+    after: str | None,
+    severity: str | None,
+    category: str | None,
+    status: str | None,
+) -> dict[str, Any]:
+    """Query params for GET /v1/projects/{id}/findings.
+
+    Walks are keyset on ``after``. Never send ``page`` — the API rejects it.
+    ``severity``, ``category``, and ``status`` filter flags only.
+    """
+    params: dict[str, Any] = {"limit": limit}
+    if after:
+        params["after"] = after
+    if severity:
+        params["severity"] = severity
+    if category:
+        params["category"] = category
+    if status:
+        params["status"] = status
+    return params
+
+
+def next_findings_after(
+    *,
+    has_more: bool,
+    after: str | None,
+    previous: str | None,
+) -> str | None:
+    """Seek token for the next findings page, or None when the walk is done.
+
+    Raises:
+        FindingsKeysetError: ``has_more`` is true but ``after`` is missing
+            or unchanged from the token just requested.
+    """
+    if not has_more:
+        return None
+    if not after or after == previous:
+        raise FindingsKeysetError(after=after, previous=previous)
+    return after
 
 
 def idempotency_headers(idempotency_key: str | None) -> dict[str, str] | None:

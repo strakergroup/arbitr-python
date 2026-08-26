@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import tempfile
 import zipfile
+from datetime import UTC, datetime
 from io import BytesIO
 from typing import Any
 
@@ -23,6 +24,9 @@ from arbitr import (
     BareLocaleCodeError,
     ClientInputError,
     DisallowedFileExtensionError,
+    FindingSeverity,
+    FindingsKeysetError,
+    FindingStatus,
     MissingApiKeyError,
     NotFoundError,
     ProjectWaitTimeoutError,
@@ -32,7 +36,15 @@ from arbitr import (
     UnknownLocaleCodesError,
     ValidationError,
 )
-from payloads import human_review_json, project_json, project_list_json
+from payloads import (
+    agent_finding_json,
+    chain_of_custody_json,
+    finding_list_json,
+    flag_finding_json,
+    human_review_json,
+    project_json,
+    project_list_json,
+)
 
 
 def make_client(handler: Any) -> ArbitrClient:
@@ -69,6 +81,21 @@ def test_projects_iterate_follows_page_numbers() -> None:
     client = make_client(handler)
     ids = [p.id for p in client.projects.iterate(limit=1)]
     assert ids == ["p1", "p2"]
+
+
+def test_iterate_projects_resumes_from_page() -> None:
+    """``page`` starts the walk, mirroring ``iterate_findings(after=...)``."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params.get("page") == "2"
+        return httpx.Response(
+            200,
+            json=project_list_json([project_json("p2")], number=2, has_more=False, limit=1),
+        )
+
+    client = make_client(handler)
+    ids = [p.id for p in client.projects.iterate(limit=1, page=2)]
+    assert ids == ["p2"]
 
 
 def test_projects_list_params() -> None:
@@ -513,6 +540,168 @@ def test_download_single_deliverable(tmp_path: Any) -> None:
     dest = tmp_path / "one.xliff"
     assert client.projects.download_deliverable("p", "d-1", dest) == dest
     assert dest.read_bytes() == b"<xliff/>"
+
+
+def test_findings_page_and_filters() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/projects/p/findings"
+        assert request.url.params.get("limit") == "10"
+        assert request.url.params.get("severity") == "critical"
+        assert request.url.params.get("status") == "open"
+        assert request.url.params.get("category") == "terminology"
+        assert "page" not in request.url.params
+        return httpx.Response(
+            200,
+            json=finding_list_json([flag_finding_json()], has_more=False, limit=10),
+        )
+
+    client = make_client(handler)
+    body = client.projects.findings(
+        "p",
+        limit=10,
+        severity=FindingSeverity.critical,
+        status=FindingStatus.open,
+        category="terminology",
+    )
+    assert [item.kind for item in body.findings] == ["flag"]
+    assert body.page.number == 1
+    assert body.page.after is None
+
+
+def test_iterate_findings_walks_after() -> None:
+    pages = {
+        None: finding_list_json(
+            [flag_finding_json("flag-1")], has_more=True, limit=1, after="0:0:flag-1"
+        ),
+        "0:0:flag-1": finding_list_json([agent_finding_json("find-2")], has_more=False, limit=1),
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/projects/p/findings"
+        assert "page" not in request.url.params
+        token = request.url.params.get("after")
+        assert token in pages
+        return httpx.Response(200, json=pages[token])
+
+    client = make_client(handler)
+    kinds = [item.kind for item in client.projects.iterate_findings("p", limit=1)]
+    assert kinds == ["flag", "agent_finding"]
+
+
+def test_findings_filters_accept_plain_strings() -> None:
+    """The enums are a hint, not a gate — a new server-side value still works."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params.get("severity") == "critical"
+        assert request.url.params.get("status") == "open"
+        return httpx.Response(200, json=finding_list_json([flag_finding_json()]))
+
+    client = make_client(handler)
+    body = client.projects.findings("p", severity="critical", status="open")
+    assert [item.kind for item in body.findings] == ["flag"]
+
+
+def test_iterate_findings_continues_on_empty_page() -> None:
+    """A skipped window can still have more pages — do not stop on an empty list."""
+    pages = {
+        None: finding_list_json([], has_more=True, limit=1, after="skip-1"),
+        "skip-1": finding_list_json([flag_finding_json("flag-1")], has_more=False, limit=1),
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = request.url.params.get("after")
+        assert token in pages
+        return httpx.Response(200, json=pages[token])
+
+    client = make_client(handler)
+    ids = [item.id for item in client.projects.iterate_findings("p", limit=1)]
+    assert ids == ["flag-1"]
+
+
+def test_iterate_findings_resumes_from_after() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params.get("after") == "0:0:flag-1"
+        return httpx.Response(
+            200,
+            json=finding_list_json([agent_finding_json("find-2")], has_more=False, limit=1),
+        )
+
+    client = make_client(handler)
+    kinds = [
+        item.kind for item in client.projects.iterate_findings("p", limit=1, after="0:0:flag-1")
+    ]
+    assert kinds == ["agent_finding"]
+
+
+def test_iterate_findings_raises_when_after_does_not_advance() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json=finding_list_json(
+                [flag_finding_json("flag-1")], has_more=True, limit=1, after="same"
+            ),
+        )
+
+    client = make_client(handler)
+    got: list[str] = []
+    with pytest.raises(FindingsKeysetError, match="did not advance"):
+        for item in client.projects.iterate_findings("p", limit=1):
+            got.append(item.id)
+    assert got == ["flag-1", "flag-1"]
+
+
+def test_iterate_findings_raises_when_has_more_without_after() -> None:
+    client = make_client(
+        lambda _r: httpx.Response(
+            200,
+            json=finding_list_json([flag_finding_json("flag-1")], has_more=True, limit=1),
+        )
+    )
+    got: list[str] = []
+    with pytest.raises(FindingsKeysetError, match="did not advance") as raised:
+        for item in client.projects.iterate_findings("p"):
+            got.append(item.id)
+    assert got == ["flag-1"]
+    assert raised.value.after is None
+    assert raised.value.previous is None
+
+
+def test_chain_of_custody() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/projects/p/chain-of-custody"
+        return httpx.Response(200, json=chain_of_custody_json("p", created_via="ui"))
+
+    client = make_client(handler)
+    body = client.projects.chain_of_custody("p")
+    assert body.created_via == "ui"
+    assert body.created_by_api_key_id is None
+    assert body.source_files[0].id == "file-1"
+
+
+def test_chain_of_custody_reads_naive_timestamps_as_utc() -> None:
+    """Live CoC has omitted the offset on timestamp-without-time-zone columns.
+
+    The caller still gets an aware value, so comparing it against an aware
+    ``datetime`` cannot raise.
+    """
+    payload = chain_of_custody_json("p")
+    payload["created_at"] = "2026-08-20T00:05:55.093379"
+    payload["deliverables"][0]["created_at"] = "2026-08-20T00:06:53.096363"
+
+    client = make_client(lambda _r: httpx.Response(200, json=payload))
+    body = client.projects.chain_of_custody("p")
+    assert body.created_at == datetime(2026, 8, 20, 0, 5, 55, 93379, tzinfo=UTC)
+    assert body.deliverables[0].created_at.tzinfo is UTC
+
+
+def test_offset_timestamps_are_normalized_to_utc() -> None:
+    payload = chain_of_custody_json("p")
+    payload["created_at"] = "2026-08-20T12:05:55+12:00"
+
+    client = make_client(lambda _r: httpx.Response(200, json=payload))
+    body = client.projects.chain_of_custody("p")
+    assert body.created_at == datetime(2026, 8, 20, 0, 5, 55, tzinfo=UTC)
+    assert body.created_at.tzinfo is UTC
 
 
 def test_get_rejects_body_that_misses_required_fields() -> None:

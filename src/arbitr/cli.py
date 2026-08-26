@@ -29,6 +29,7 @@ from arbitr import (
 )
 from arbitr._credentials import load_host_settings, resolve_cli_max_retries
 from arbitr._http import project_ui_url
+from arbitr.generated.models import FindingSeverity, FindingStatus
 
 app = typer.Typer(
     name="arbitr",
@@ -194,7 +195,10 @@ def languages(
 def projects(
     ctx: typer.Context,
     limit: Annotated[int, typer.Option("--limit", help="page size")] = 50,
-    page: Annotated[int, typer.Option("--page", help="1-based page number")] = 1,
+    page: Annotated[
+        int,
+        typer.Option("--page", min=1, help="1-based page number; with --all, start here"),
+    ] = 1,
     all_pages: Annotated[bool, typer.Option("--all", help="follow pagination")] = False,
     modified_after: Annotated[
         str | None,
@@ -209,7 +213,7 @@ def projects(
             return {
                 "projects": list(
                     client.projects.iterate(
-                        limit=limit, modified_after=modified_after, status=status
+                        limit=limit, page=page, modified_after=modified_after, status=status
                     )
                 )
             }
@@ -358,6 +362,64 @@ def submit(
 def deliverables(ctx: typer.Context, project_id: ProjectIdArg) -> None:
     """List a project's deliverable files."""
     execute(ctx, lambda client: client.projects.deliverables(project_id))
+
+
+@app.command()
+def findings(
+    ctx: typer.Context,
+    project_id: ProjectIdArg,
+    limit: Annotated[int, typer.Option("--limit", min=1, max=200, help="page size")] = 50,
+    after: Annotated[
+        str | None,
+        typer.Option(
+            "--after",
+            help="seek token from the previous page's page.after; with --all, start here",
+        ),
+    ] = None,
+    severity: Annotated[
+        FindingSeverity | None,
+        typer.Option("--severity", help="restrict to flags of this severity"),
+    ] = None,
+    category: Annotated[str | None, typer.Option("--category", help="exact flag category")] = None,
+    status: Annotated[
+        FindingStatus | None, typer.Option("--status", help="restrict to flags with this status")
+    ] = None,
+    all_pages: Annotated[
+        bool, typer.Option("--all", help="walk page.after until has_more is false")
+    ] = False,
+) -> None:
+    """List verification findings (flags and agent findings) for a project."""
+
+    def op(client: ArbitrClient) -> Any:
+        if all_pages:
+            return {
+                "findings": list(
+                    client.projects.iterate_findings(
+                        project_id,
+                        limit=limit,
+                        after=after,
+                        severity=severity,
+                        category=category,
+                        status=status,
+                    )
+                )
+            }
+        return client.projects.findings(
+            project_id,
+            limit=limit,
+            after=after,
+            severity=severity,
+            category=category,
+            status=status,
+        )
+
+    execute(ctx, op)
+
+
+@app.command("chain-of-custody")
+def chain_of_custody(ctx: typer.Context, project_id: ProjectIdArg) -> None:
+    """Get the provenance record for a project."""
+    execute(ctx, lambda client: client.projects.chain_of_custody(project_id))
 
 
 @app.command()
