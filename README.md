@@ -35,6 +35,12 @@ Coding agents: give your agent this prompt:
 Set up arbitr for me. Fetch https://arbitr.apidocumentation.com/getting-started/agent-setup/index.md and follow it.
 ```
 
+Or install the persistent agent skill:
+
+```bash
+npx -y skills add strakergroup/arbitr-python --skill arbitr --yes --global
+```
+
 CLI:
 
 Mint a key at [https://arbitr.straker.ai/settings/api-keys](https://arbitr.straker.ai/settings/api-keys).
