@@ -29,6 +29,12 @@ async with AsyncArbitrClient.from_env() as client:
     me = await client.me()
 ```
 
+Coding agents: give your agent this prompt:
+
+```text
+Set up arbitr for me. Fetch https://arbitr.apidocumentation.com/getting-started/agent-setup/index.md and follow it.
+```
+
 CLI:
 
 Mint a key at [https://arbitr.straker.ai/settings/api-keys](https://arbitr.straker.ai/settings/api-keys).
