@@ -36,7 +36,7 @@ arbitr = "arbitr.cli:entrypoint"
 
 [project.urls]
 Homepage = "https://github.com/strakergroup/arbitr-python"
-Documentation = "https://api-arbitr.straker.ai/docs"
+Documentation = "https://arbitr.apidocumentation.com/introduction"
 Source = "https://github.com/strakergroup/arbitr-python"
 
 [dependency-groups]
