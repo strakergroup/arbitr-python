@@ -38,7 +38,7 @@ wheels = [
 ]
 
 [[package]]
-name = "arbitr"
+name = "arbitr-sdk"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },

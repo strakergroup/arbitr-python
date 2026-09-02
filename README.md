@@ -3,8 +3,10 @@
 Official Python client and `arbitr` CLI for the [Arbitr External API](https://api-arbitr.straker.ai/docs).
 
 ```bash
-pip install arbitr
+pip install arbitr-sdk
 ```
+
+The PyPI package is `arbitr-sdk`. The import and CLI stay `arbitr`.
 
 ```python
 from arbitr import ArbitrClient
