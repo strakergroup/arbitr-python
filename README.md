@@ -1,6 +1,6 @@
 # Arbitr Python
 
-Official Python client and `arbitr` CLI for the [Arbitr External API](https://api-arbitr.straker.ai/docs).
+Official Python client and `arbitr` CLI for the [Arbitr External API](https://arbitr.apidocumentation.com/introduction).
 
 ```bash
 pip install arbitr-sdk
