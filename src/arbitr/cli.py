@@ -1,10 +1,12 @@
-"""``arbitr`` — CLI for the Arbitr External API.
+"""arbitr — CLI for the Arbitr External API.
 
 Credentials come from the environment (ARBITR_API_KEY / ARBITR_BASE_URL) or a
-dotenv file (default: ./.env).
+dotenv file (default: ./.env). Mint a key at
+https://arbitr.straker.ai/settings/api-keys
 
-Exit codes: 0 ok, 1 API error, 2 usage/config/timeout, 3 project parked at a
-human gate (agent_selection / awaiting_payment).
+Exit codes: 0 ok, 1 API error, 2 usage/config/network/timeout, 3 project is
+waiting on a person (agent_selection or awaiting_payment) and cannot proceed
+until they act.
 """
 
 from __future__ import annotations
@@ -107,7 +109,8 @@ def split_csv(value: str | None) -> list[str]:
 def execute(ctx: typer.Context, operation: Callable[[ArbitrClient], Any]) -> None:
     """Run one command against the API and print JSON.
 
-    Exit codes: 1 API error, 2 config/network/timeout, 3 parked at a human gate.
+    Exit codes: 1 API error, 2 usage/config/network/timeout, 3 project is
+    waiting on a person (agent_selection / awaiting_payment).
     Every error this package can raise is handled here — the CLI must never
     surface a traceback.
     """
