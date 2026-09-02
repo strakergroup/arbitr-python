@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "arbitr"
+name = "arbitr-sdk"
 dynamic = ["version"]
 description = "Official Python client and CLI for the Arbitr External API"
 readme = "README.md"
