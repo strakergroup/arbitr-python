@@ -12,6 +12,9 @@ jobs:
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
+      # Job-level permissions replace the workflow defaults. Checkout needs
+      # contents: read or a private repo looks like "not found".
+      contents: read
       # Required for PyPI trusted publishing — no API token is stored.
       id-token: write
     steps:
