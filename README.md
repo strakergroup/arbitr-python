@@ -48,9 +48,10 @@ Language codes are lowercase BCP-47 tags (`ko-kr`, `fr-fr`). Bare codes (`ko`)
 are rejected by the API — `client.languages.resolve(["ko"])` expands them, or
 `arbitr submit --resolve-locales` does it for you.
 
-The client wraps the **published** OpenAPI surface only. Deprecated aliases
-(agent-selection, `/deliverables/zip`, `/resume`) are not wrapped; use the
-canonical replacements (`wait()` / the Arbitr UI, `?format=zip`, `/resumptions`).
+The client wraps the **published** OpenAPI surface only. Former aliases
+(agent-selection, `/deliverables/zip`, `/resume`) have been removed from the
+API and answer `410 Gone`; this package already uses the canonical replacements
+(`wait()` / the Arbitr UI, `?format=zip`, `/resumptions`).
 
 ## CLI
 
