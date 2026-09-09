@@ -9,7 +9,8 @@ import pytest
 
 from arbitr import ProjectResponse, ResponseDecodeError, ResponseParseError
 from arbitr._parse import decode_json_body, parse_response
-from payloads import project_json
+from arbitr.generated.models import AgentFinding, FindingType
+from payloads import agent_finding_json, project_json
 
 
 def test_parse_response_accepts_required_fields() -> None:
@@ -53,3 +54,8 @@ def test_malformed_json_is_a_typed_decode_error() -> None:
         decode_json_body(resp, operation="getCurrentKey")
     assert raised.value.operation == "getCurrentKey"
     assert isinstance(raised.value.__cause__, json.JSONDecodeError)
+
+
+def test_agent_finding_accepts_repaired_type() -> None:
+    model = AgentFinding.model_validate(agent_finding_json(finding_type="repaired"))
+    assert model.finding_type is FindingType.repaired

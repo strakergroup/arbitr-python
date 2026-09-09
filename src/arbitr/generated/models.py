@@ -18,6 +18,7 @@ class FindingType(StrEnum):
     affirmation = "affirmation"
     smoothing = "smoothing"
     term_missing = "term_missing"
+    repaired = "repaired"
 
 
 class AgentFinding(BaseModel):
@@ -360,6 +361,11 @@ class ErrorDetail(BaseModel):
         None,
         description="Credits still needed. Present on `payment_required`.",
         title="Shortfall",
+    )
+    current_status: str | None = Field(
+        None,
+        description="Present on `not_awaiting_payment` when the project status is known (intelligence-credit resume conflict).",
+        title="Current Status",
     )
 
 

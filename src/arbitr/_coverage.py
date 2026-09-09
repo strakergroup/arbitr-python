@@ -11,18 +11,10 @@ from dataclasses import dataclass, field
 
 from arbitr._spec import pinned_spec
 
-# Deprecated aliases still in the published spec. The canonical replacements
-# are implemented; these ids must not grow a wrapper.
-IGNORED_OPERATION_IDS = frozenset(
-    {
-        "getAgentSelection",
-        "submitAgentSelection",
-        "downloadDeliverablesZip",
-        "downloadDeliverable",
-        "resumeProject",
-        "resumeHumanReview",
-    }
-)
+# Formerly ignored deprecated aliases (agent-selection, deliverables/zip,
+# resume) have been removed from the published OpenAPI and answer 410 Gone.
+# Keep this empty unless a new published-but-unwrapped id must be excused.
+IGNORED_OPERATION_IDS: frozenset[str] = frozenset()
 
 # operationId -> dotted attribute on ArbitrClient / AsyncArbitrClient
 OPERATION_METHODS: dict[str, str] = {
