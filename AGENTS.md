@@ -2,7 +2,27 @@
 
 Official Python SDK + CLI for the Arbitr External API.
 
-Domain terms live in `CONTEXT.md`.
+Domain terms live in `CONTEXT.md`. Cursor always-on copy of the git
+policy: `.cursor/rules/public-sdk-git.mdc`.
+
+## Public git
+
+This repository is public. Branch names, commits, tags, and pull requests
+are customer-visible.
+
+- No ticket ids in branches, commits, PR titles, bodies, or tags.
+- No issue-tracker URLs, internal hostnames, deploy notes, or employee
+  machine paths.
+- Write for an external caller: what changed in the published API/CLI/SDK
+  and why it matters to them.
+- Reuse a short descriptive branch (`findings-and-chain-of-custody`), not a
+  ticket-prefixed name.
+- Do not commit agent working notes, implementation plans, or design specs.
+  Do not add `/docs` indexes or changelogs unless a human asked for them.
+
+Wrong: `fix(TICKET-1234): timestamps after staging smoke`
+
+Right: `Serialize chain-of-custody timestamps with a UTC offset`
 
 ## Surface rules
 
