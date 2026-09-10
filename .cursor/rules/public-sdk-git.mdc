@@ -1,0 +1,34 @@
+---
+description: Public SDK git — no ticket ids or internals in branches, commits, or PRs
+alwaysApply: true
+---
+
+# Public git surface
+
+Same policy as the **Public git** section in `AGENTS.md`. This history is
+customer-visible.
+
+## Branches
+
+- No ticket ids in branch names.
+- Use a short public description: `findings-and-chain-of-custody`, not
+  `PROJ-1234_v1-findings-and-chain-of-custody`.
+- Reuse the existing descriptive branch for the same change.
+
+## Commits, PRs, tags
+
+- No ticket ids in subjects, bodies, PR titles, or tags.
+- No issue-tracker URLs, internal hostnames, deploy notes, or employee
+  machine paths.
+- Write for an external caller: what changed in the published API/CLI/SDK
+  and why it matters to them.
+
+Wrong: `fix(TICKET-1234): timestamps after staging smoke`
+
+Right: `Serialize chain-of-custody timestamps with a UTC offset`
+
+## Agent notes
+
+Do not commit agent working notes, implementation plans, or design specs.
+Do not add `/docs` indexes or changelogs for the change just made unless a
+human asked for them.

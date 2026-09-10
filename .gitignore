@@ -3,6 +3,11 @@
 .env.*
 !.env.example
 
+# Cursor local state (MCP configs, hooks). Commit only project rules.
+.cursor/*
+!.cursor/rules/
+!.cursor/rules/**/*.mdc
+
 __pycache__/
 .venv/
 venv/
