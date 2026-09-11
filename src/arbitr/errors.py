@@ -105,7 +105,17 @@ class GoneError(ArbitrError):
 
 
 class ConflictError(ArbitrError):
-    """409 — e.g. Idempotency-Key reused with a different body."""
+    """409 — e.g. Idempotency-Key reused with a different body.
+
+    On ``not_awaiting_payment``, the API may include ``current_status`` naming
+    the project's status when the conflict was detected.
+    """
+
+    @property
+    def current_status(self) -> str | None:
+        """Project status on ``not_awaiting_payment`` when the API sent it."""
+        raw = self.extra.get("current_status")
+        return raw if isinstance(raw, str) else None
 
 
 class ValidationError(ArbitrError):

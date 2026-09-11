@@ -33,9 +33,9 @@ async def test_async_client_exposes_mapped_methods() -> None:
 
 
 def test_ignored_aliases_are_still_published() -> None:
-    """The ignore list only exists to excuse ids that are actually in the spec."""
+    """Ignores must be a subset of published ids (empty ignore set is fine)."""
     assert published_operation_ids() >= IGNORED_OPERATION_IDS
 
 
-def test_deprecated_operations_are_never_wrapped() -> None:
+def test_ignored_operations_are_never_wrapped() -> None:
     assert IGNORED_OPERATION_IDS.isdisjoint(OPERATION_METHODS)

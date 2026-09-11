@@ -167,6 +167,31 @@ def test_required_scope_is_none_when_absent() -> None:
     assert raised.value.required_scope is None
 
 
+def test_conflict_exposes_current_status() -> None:
+    handler = error_response(
+        409,
+        "not_awaiting_payment",
+        current_status="translating",
+    )
+    with make_client(handler) as client, pytest.raises(ConflictError) as raised:
+        client.projects.resume("p")
+    assert raised.value.current_status == "translating"
+
+
+def test_conflict_current_status_is_none_when_absent() -> None:
+    handler = error_response(409, "conflict")
+    with make_client(handler) as client, pytest.raises(ConflictError) as raised:
+        client.me()
+    assert raised.value.current_status is None
+
+
+def test_conflict_current_status_ignores_non_string() -> None:
+    handler = error_response(409, "not_awaiting_payment", current_status=123)
+    with make_client(handler) as client, pytest.raises(ConflictError) as raised:
+        client.projects.resume("p")
+    assert raised.value.current_status is None
+
+
 def raising_transport(exc: Exception) -> Any:
     def handler(request: httpx.Request) -> httpx.Response:
         raise exc

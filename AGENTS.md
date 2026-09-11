@@ -26,10 +26,11 @@ Right: `Serialize chain-of-custody timestamps with a UTC offset`
 
 ## Surface rules
 
-- Wrap **published** OpenAPI operations only. The mapped and
-  deprecated-ignored operation tables live in `src/arbitr/_coverage.py` and are
-  shared by `scripts/check_operation_coverage.py` and
-  `tests/test_operation_coverage.py` — edit them in that one place.
+- Wrap **published** OpenAPI operations only. The mapped operation table and
+  optional ignore set live in `src/arbitr/_coverage.py` and are shared by
+  `scripts/check_operation_coverage.py` and `tests/test_operation_coverage.py`
+  — edit them in that one place. Prefer an empty ignore set; only add an id
+  when it is still published but must not grow a wrapper.
 - After `https://api-arbitr.straker.ai/openapi.json` changes, refresh
   `src/arbitr/openapi.json` (it ships inside the package; read it with
   `arbitr.pinned_spec()`), regenerate models, add methods on **both**
