@@ -197,7 +197,7 @@ def languages(
 @app.command()
 def projects(
     ctx: typer.Context,
-    limit: Annotated[int, typer.Option("--limit", help="page size")] = 50,
+    limit: Annotated[int, typer.Option("--limit", min=1, max=200, help="page size")] = 50,
     page: Annotated[
         int,
         typer.Option("--page", min=1, help="1-based page number; with --all, start here"),
@@ -365,6 +365,16 @@ def submit(
 def deliverables(ctx: typer.Context, project_id: ProjectIdArg) -> None:
     """List a project's deliverable files."""
     execute(ctx, lambda client: client.projects.deliverables(project_id))
+
+
+@app.command()
+def deliverable(
+    ctx: typer.Context,
+    project_id: ProjectIdArg,
+    deliverable_id: Annotated[str, typer.Argument(help="deliverable id (UUID)")],
+) -> None:
+    """Print one deliverable's JSON metadata."""
+    execute(ctx, lambda client: client.projects.deliverable(project_id, deliverable_id))
 
 
 @app.command()
