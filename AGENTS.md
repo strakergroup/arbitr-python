@@ -35,7 +35,9 @@ Right: `Serialize chain-of-custody timestamps with a UTC offset`
   `src/arbitr/openapi.json` (it ships inside the package; read it with
   `arbitr.pinned_spec()`), regenerate models, add methods on **both**
   `ArbitrClient` and `AsyncArbitrClient`, and mirror the tests in
-  `tests/test_client.py` and `tests/test_async_client.py`.
+  `tests/test_client.py` and `tests/test_async_client.py`. Scheduled CI
+  opens or updates that pin/model refresh as a pull request on
+  `openapi-spec-drift`; new operations still need methods on both clients.
 - Do not hand-edit `src/arbitr/generated/`.
 - Do not implement sync by calling `asyncio.run` on the async client.
 - Default base URL is `https://api-arbitr.straker.ai`. Pin OpenAPI from that

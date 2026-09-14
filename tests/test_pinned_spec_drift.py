@@ -223,3 +223,90 @@ def test_cli_missing_other_file_exits_2(tmp_path: Path) -> None:
     )
     assert result.returncode == 2
     assert "cannot read" in result.stderr
+
+
+def test_write_pin_on_match_leaves_the_pin_file(
+    script: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dest = tmp_path / "openapi.json"
+    dest.write_text("untouched", encoding="utf-8")
+    monkeypatch.setattr(script, "PIN_PATH", dest)
+    other = tmp_path / "live.json"
+    other.write_text(json.dumps(pinned_spec()), encoding="utf-8")
+    assert script.main(["--other-file", str(other), "--write-pin"]) == 0
+    assert dest.read_text(encoding="utf-8") == "untouched"
+
+
+def test_write_pin_on_drift_writes_the_live_document(
+    script: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    dest = tmp_path / "openapi.json"
+    dest.write_text("stale-pin", encoding="utf-8")
+    monkeypatch.setattr(script, "PIN_PATH", dest)
+    live = pinned_spec()
+    live.setdefault("paths", {})["/v1/projects/{project_id}/findings"] = {
+        "get": {"operationId": "listProjectFindings"}
+    }
+    other = tmp_path / "live.json"
+    raw = json.dumps(live, separators=(",", ":"))
+    other.write_text(raw, encoding="utf-8")
+    assert script.main(["--other-file", str(other), "--write-pin"]) == 0
+    assert dest.read_text(encoding="utf-8") == raw
+    assert "wrote" in capsys.readouterr().out.lower()
+
+
+def test_drift_without_write_pin_does_not_write(
+    script: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dest = tmp_path / "openapi.json"
+    dest.write_text("untouched", encoding="utf-8")
+    monkeypatch.setattr(script, "PIN_PATH", dest)
+    live = pinned_spec()
+    live.setdefault("paths", {})["/v1/projects/{project_id}/findings"] = {
+        "get": {"operationId": "listProjectFindings"}
+    }
+    other = tmp_path / "live.json"
+    other.write_text(json.dumps(live), encoding="utf-8")
+    assert script.main(["--other-file", str(other)]) == 1
+    assert dest.read_text(encoding="utf-8") == "untouched"
+
+
+def test_fetched_url_write_pin_writes_response_body(
+    script: ModuleType,
+    spec_api: respx.MockRouter,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dest = tmp_path / "openapi.json"
+    dest.write_text("stale-pin", encoding="utf-8")
+    monkeypatch.setattr(script, "PIN_PATH", dest)
+    live = pinned_spec()
+    live.setdefault("paths", {})["/v1/projects/{project_id}/findings"] = {
+        "get": {"operationId": "listProjectFindings"}
+    }
+    raw = json.dumps(live, separators=(",", ":"))
+    spec_api.get("/openapi.json").mock(
+        return_value=httpx.Response(200, text=raw, headers={"content-type": "application/json"})
+    )
+    assert script.main(["--url", _SPEC_URL, "--write-pin"]) == 0
+    assert dest.read_text(encoding="utf-8") == raw
+
+
+def test_write_pin_unwritable_path_exits_3(
+    script: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    dest = tmp_path / "openapi.json"
+    dest.mkdir()
+    monkeypatch.setattr(script, "PIN_PATH", dest)
+    live = pinned_spec()
+    live.setdefault("paths", {})["/v1/new"] = {"get": {"operationId": "newOp"}}
+    other = tmp_path / "live.json"
+    other.write_text(json.dumps(live), encoding="utf-8")
+    assert script.main(["--other-file", str(other), "--write-pin"]) == script.EXIT_UNEXPECTED
+    assert "cannot write" in capsys.readouterr().err

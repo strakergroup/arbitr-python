@@ -1,4 +1,5 @@
-# Fail when the packaged OpenAPI pin lags deployed production.
+# Fail when the packaged OpenAPI pin lags deployed production, and open a
+# pull request that refreshes the pin and generated models.
 #
 # Pytest stays offline (httpx.MockTransport / respx). This job is the only
 # CI that fetches the public prod spec — GET /openapi.json, no API key.
@@ -6,6 +7,9 @@
 # Does not run on pull_request: an unrelated PR must not go red because
 # prod shipped a new operation. Nightly + workflow_dispatch + pin-file
 # pushes to master are the signal.
+#
+# Creating the refresh PR needs write access. The default GITHUB_TOKEN
+# must be allowed to create pull requests (Actions → General).
 
 name: Pinned spec drift
 
@@ -21,13 +25,21 @@ on:
       - "scripts/check_pinned_spec.py"
       - ".github/workflows/pinned-spec-drift.yml"
 
+concurrency:
+  group: pinned-spec-drift
+  cancel-in-progress: false
+
 permissions:
-  contents: read
+  contents: write
+  pull-requests: write
 
 jobs:
   drift:
     name: Live prod OpenAPI vs pin
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.0.1
@@ -35,10 +47,11 @@ jobs:
           python-version: "3.12"
           enable-cache: true
       - run: uv sync --frozen
-      # Exit 1 is real drift (fail immediately). Exit 2 is unreadable prod
+      # Exit 1 is real drift (refresh + PR). Exit 2 is unreadable prod
       # (retry). Exit 3 is an unexpected script failure. Exit 4 is an
       # unreadable packaged pin (fail immediately; not a prod flake).
       - name: Compare pin to production OpenAPI
+        id: compare
         run: |
           for attempt in 1 2 3; do
             set +e
@@ -46,10 +59,14 @@ jobs:
             status=$?
             set -e
             case "$status" in
-              0) exit 0 ;;
+              0)
+                echo "drifted=false" >> "$GITHUB_OUTPUT"
+                exit 0
+                ;;
               1)
-                echo "::error::Pinned OpenAPI drifted from production. Refresh src/arbitr/openapi.json, regenerate models, then update both clients."
-                exit 1
+                echo "drifted=true" >> "$GITHUB_OUTPUT"
+                echo "::notice::Pinned OpenAPI drifted from production. Refreshing the snapshot and opening a pull request."
+                exit 0
                 ;;
               3)
                 echo "::error::Pinned spec check failed unexpectedly (exit 3). This is not drift."
@@ -66,4 +83,75 @@ jobs:
             fi
           done
           echo "::error::Could not read the production OpenAPI after 3 attempts. Drift is unknown, not ruled out."
+          exit 1
+      - name: Refresh pin and generated models
+        if: steps.compare.outputs.drifted == 'true'
+        run: |
+          uv run python scripts/check_pinned_spec.py --write-pin
+          uv run python scripts/generate_models.py
+      - name: Open or update the snapshot refresh pull request
+        if: steps.compare.outputs.drifted == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          coverage_out="$(mktemp)"
+          set +e
+          uv run python scripts/check_operation_coverage.py >"$coverage_out" 2>&1
+          coverage_status=$?
+          set -e
+
+          git checkout -B openapi-spec-drift
+          git add -- src/arbitr/openapi.json src/arbitr/generated
+          if git diff --cached --quiet; then
+            echo "::error::Pinned OpenAPI drifted from production, but the refresh produced no file changes."
+            exit 1
+          fi
+          git commit -m "Refresh the pinned OpenAPI snapshot and generated models"
+          git push --force origin HEAD:openapi-spec-drift
+
+          body="$(mktemp)"
+          {
+            echo "Production \`/openapi.json\` changed. This pull request updates the snapshot shipped in the package and regenerates the Pydantic models used by the client and CLI."
+            echo
+            echo "New published operations still need wrappers on both \`ArbitrClient\` and \`AsyncArbitrClient\` before merge. See CONTRIBUTING.md."
+            echo
+            echo "## Operation coverage"
+            if [ "$coverage_status" -eq 0 ]; then
+              echo "Both clients already wrap the published operations."
+            else
+              echo "Coverage failed after the refresh. Add methods on both clients (and matching tests) before merge:"
+              echo
+              echo '```'
+              cat "$coverage_out"
+              echo '```'
+            fi
+            echo
+            echo "This branch is reused when production drifts again; further snapshot changes update this pull request."
+          } >"$body"
+
+          existing="$(gh pr list --repo "$GITHUB_REPOSITORY" --base master --head "${GITHUB_REPOSITORY%%/*}:openapi-spec-drift" --state open --json url --jq '.[0].url // empty')"
+          if [ -n "$existing" ]; then
+            gh pr edit "$existing" --title "Refresh the pinned OpenAPI snapshot and generated models" --body-file "$body"
+            if [ "$coverage_status" -eq 0 ]; then
+              gh pr ready "$existing" || true
+            fi
+            pr_url="$existing"
+          else
+            create_args=(
+              --repo "$GITHUB_REPOSITORY"
+              --base master
+              --head openapi-spec-drift
+              --title "Refresh the pinned OpenAPI snapshot and generated models"
+              --body-file "$body"
+            )
+            if [ "$coverage_status" -ne 0 ]; then
+              create_args+=(--draft)
+            fi
+            pr_url="$(gh pr create "${create_args[@]}")"
+          fi
+          echo "::error::Pinned OpenAPI drifted from production. Refresh PR: $pr_url — regenerate models, then update both clients if coverage failed."
           exit 1

@@ -29,6 +29,12 @@ mirror the tests in `tests/test_client.py` and `tests/test_async_client.py`.
 `scripts/check_operation_coverage.py` fails if a published operation is left
 unwrapped.
 
+Nightly CI compares the pin to production. On drift it writes the live
+document, regenerates models, and opens or updates a pull request on
+`openapi-spec-drift`. Merge still requires both clients to wrap any new
+operations. A pull request opened by `GITHUB_TOKEN` does not run CI until
+a collaborator pushes a commit or closes and reopens it.
+
 The snapshot ships inside the package, so an installed copy can diff itself
 against a live host:
 
