@@ -408,6 +408,18 @@ def test_deliverables_command(runner: CliRunner, api: respx.MockRouter) -> None:
     assert json.loads(result.output)["deliverables"][0]["id"] == "d-1"
 
 
+def test_deliverable_command(runner: CliRunner, api: respx.MockRouter) -> None:
+    api.get("/v1/projects/p/deliverables/d-1").respond(
+        200,
+        json={"id": "d-1", "file_id": "f-1", "file_type": "xliff", "locale_code": "ko-kr"},
+    )
+    result = runner.invoke(app, ["deliverable", "p", "d-1"], env=ENV)
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["id"] == "d-1"
+    assert payload["locale_code"] == "ko-kr"
+
+
 def test_findings_command(runner: CliRunner, api: respx.MockRouter) -> None:
     api.get("/v1/projects/p/findings").respond(
         200,
@@ -535,6 +547,13 @@ def test_projects_all_honours_limit(runner: CliRunner, api: respx.MockRouter) ->
     result = runner.invoke(app, ["projects", "--all", "--limit", "7"], env=ENV)
     assert result.exit_code == 0
     assert [p["id"] for p in json.loads(result.output)["projects"]] == ["p1"]
+
+
+def test_projects_rejects_out_of_range_limit(runner: CliRunner) -> None:
+    """The spec caps limit at 200; reject locally instead of spending a 422."""
+    result = runner.invoke(app, ["projects", "--limit", "500"], env=ENV)
+    assert result.exit_code == 2
+    assert "200" in _ANSI_ESCAPE.sub("", f"{result.output}\n{result.stderr}")
 
 
 def test_status_command_annotates_ui_links(runner: CliRunner, api: respx.MockRouter) -> None:
