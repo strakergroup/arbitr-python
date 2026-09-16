@@ -19,6 +19,7 @@ class FindingType(StrEnum):
     smoothing = "smoothing"
     term_missing = "term_missing"
     repaired = "repaired"
+    rewrite = "rewrite"
 
 
 class AgentFinding(BaseModel):
