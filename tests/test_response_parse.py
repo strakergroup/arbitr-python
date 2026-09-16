@@ -59,3 +59,8 @@ def test_malformed_json_is_a_typed_decode_error() -> None:
 def test_agent_finding_accepts_repaired_type() -> None:
     model = AgentFinding.model_validate(agent_finding_json(finding_type="repaired"))
     assert model.finding_type is FindingType.repaired
+
+
+def test_agent_finding_accepts_rewrite_type() -> None:
+    model = AgentFinding.model_validate(agent_finding_json(finding_type="rewrite"))
+    assert model.finding_type is FindingType.rewrite
