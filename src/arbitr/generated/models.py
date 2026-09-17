@@ -6,14 +6,14 @@ Regenerate with: uv run python scripts/generate_models.py
 from __future__ import annotations
 
 from datetime import date
-from enum import StrEnum
 from typing import Annotated, Literal
 
 from arbitr._datetime import UtcDatetime
+from arbitr._enums import TolerantStrEnum
 from pydantic import BaseModel, ConfigDict, Field, constr
 
 
-class FindingType(StrEnum):
+class FindingType(TolerantStrEnum):
     substitution = "substitution"
     affirmation = "affirmation"
     smoothing = "smoothing"
@@ -77,7 +77,7 @@ class BodyCreateProject(BaseModel):
     )
 
 
-class CreatedVia(StrEnum):
+class CreatedVia(TolerantStrEnum):
     api = "api"
     ui = "ui"
 
@@ -136,13 +136,13 @@ class FindingPage(BaseModel):
     )
 
 
-class FindingSeverity(StrEnum):
+class FindingSeverity(TolerantStrEnum):
     critical = "critical"
     major = "major"
     minor = "minor"
 
 
-class FindingStatus(StrEnum):
+class FindingStatus(TolerantStrEnum):
     open = "open"
     resolved = "resolved"
 
@@ -164,7 +164,7 @@ class FlagFinding(BaseModel):
     agent_source: str | None = Field(None, title="Agent Source")
 
 
-class HumanReviewStatus(StrEnum):
+class HumanReviewStatus(TolerantStrEnum):
     queued = "queued"
     in_review = "in_review"
     completed = "completed"
@@ -191,7 +191,7 @@ class LanguageResponse(BaseModel):
     name: str = Field(..., title="Name")
 
 
-class ApiKeyMode(StrEnum):
+class ApiKeyMode(TolerantStrEnum):
     live = "live"
     test = "test"
 

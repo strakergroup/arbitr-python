@@ -108,6 +108,30 @@ def use_utc_datetime(text: str) -> str:
     return text
 
 
+def use_tolerant_enums(text: str) -> str:
+    """Swap the generated ``StrEnum`` base for ``arbitr._enums.TolerantStrEnum``.
+
+    A closed enum makes every additive server-side value a breaking change for
+    already-installed clients. Rewriting the base rather than listing enums here
+    means an enum a later spec refresh introduces is tolerant from its first run.
+    """
+    if "(StrEnum)" not in text:
+        raise SystemExit("expected a StrEnum base in the generated output")
+    text = text.replace("(StrEnum)", "(TolerantStrEnum)")
+    text = text.replace("from enum import StrEnum\n", "", 1)
+    text, inserted = re.subn(
+        r"from pydantic import ",
+        "from arbitr._enums import TolerantStrEnum\nfrom pydantic import ",
+        text,
+        count=1,
+    )
+    if inserted != 1:
+        raise SystemExit("expected a pydantic import to hang the TolerantStrEnum import on")
+    if re.search(r"\bStrEnum\b", text):
+        raise SystemExit("a bare StrEnum survived the tolerant-enum rewrite")
+    return text
+
+
 def main() -> None:
     """Run datamodel-code-generator against the pinned spec."""
     OUT.parent.mkdir(parents=True, exist_ok=True)
@@ -141,7 +165,7 @@ def main() -> None:
     subprocess.run(cmd, check=True)
     text = OUT.read_text()
     check_model_names(text)
-    OUT.write_text(use_utc_datetime(text))
+    OUT.write_text(use_tolerant_enums(use_utc_datetime(text)))
     subprocess.run(
         [sys.executable, "-m", "ruff", "format", str(OUT)],
         check=True,

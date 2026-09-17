@@ -61,3 +61,44 @@ def test_use_utc_datetime_parenthesized_import() -> None:
 def test_use_utc_datetime_requires_awaredatetime() -> None:
     with pytest.raises(SystemExit, match="expected AwareDatetime"):
         generate_models.use_utc_datetime("from pydantic import BaseModel\n")
+
+
+def test_use_tolerant_enums_rewrites_every_enum_base() -> None:
+    text = (
+        "from datetime import date\n"
+        "from enum import StrEnum\n"
+        "from typing import Annotated\n"
+        "\n"
+        "from arbitr._datetime import UtcDatetime\n"
+        "from pydantic import BaseModel\n"
+        "\n"
+        "class FindingType(StrEnum):\n"
+        "    repaired = 'repaired'\n"
+        "\n"
+        "class ApiKeyMode(StrEnum):\n"
+        "    live = 'live'\n"
+    )
+    out = generate_models.use_tolerant_enums(text)
+    assert "from arbitr._enums import TolerantStrEnum\nfrom pydantic import BaseModel\n" in out
+    assert "class FindingType(TolerantStrEnum):" in out
+    assert "class ApiKeyMode(TolerantStrEnum):" in out
+    assert "from enum import StrEnum" not in out
+
+
+def test_use_tolerant_enums_requires_an_enum_to_rewrite() -> None:
+    with pytest.raises(SystemExit, match="StrEnum"):
+        generate_models.use_tolerant_enums("from pydantic import BaseModel\n")
+
+
+def test_use_tolerant_enums_rejects_a_surviving_bare_strenum() -> None:
+    text = (
+        "from enum import StrEnum\n"
+        "from pydantic import BaseModel\n"
+        "\n"
+        "class Odd(StrEnum):\n"
+        "    a = 'a'\n"
+        "\n"
+        "Alias = StrEnum\n"
+    )
+    with pytest.raises(SystemExit, match="survived"):
+        generate_models.use_tolerant_enums(text)

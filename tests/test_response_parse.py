@@ -9,8 +9,8 @@ import pytest
 
 from arbitr import ProjectResponse, ResponseDecodeError, ResponseParseError
 from arbitr._parse import decode_json_body, parse_response
-from arbitr.generated.models import AgentFinding, FindingType
-from payloads import agent_finding_json, project_json
+from arbitr.generated.models import AgentFinding, FindingListResponse, FindingType, FlagFinding
+from payloads import agent_finding_json, flag_finding_json, project_json
 
 
 def test_parse_response_accepts_required_fields() -> None:
@@ -64,3 +64,35 @@ def test_agent_finding_accepts_repaired_type() -> None:
 def test_agent_finding_accepts_rewrite_type() -> None:
     model = AgentFinding.model_validate(agent_finding_json(finding_type="rewrite"))
     assert model.finding_type is FindingType.rewrite
+
+
+def test_agent_finding_accepts_a_finding_type_this_build_does_not_know() -> None:
+    model = AgentFinding.model_validate(agent_finding_json(finding_type="teleportation"))
+    assert model.finding_type == "teleportation"
+    assert FindingType.is_known(model.finding_type) is False
+
+
+def test_one_unknown_finding_type_does_not_fail_the_whole_page() -> None:
+    page = parse_response(
+        FindingListResponse,
+        {
+            "findings": [
+                agent_finding_json("find-1", finding_type="teleportation"),
+                agent_finding_json("find-2", finding_type="substitution"),
+            ],
+            "page": {"has_more": False, "limit": 50, "after": None},
+        },
+        operation="listProjectFindings",
+    )
+    assert [finding.id for finding in page.findings] == ["find-1", "find-2"]
+    known = page.findings[1]
+    assert isinstance(known, AgentFinding)
+    assert known.finding_type is FindingType.substitution
+
+
+def test_flag_finding_accepts_an_unknown_severity_and_status() -> None:
+    model = FlagFinding.model_validate(
+        flag_finding_json(severity="catastrophic", status="escalated")
+    )
+    assert model.severity == "catastrophic"
+    assert model.status == "escalated"
