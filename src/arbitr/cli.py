@@ -52,9 +52,14 @@ class ClientConfig:
 
 
 def _print_version(value: bool) -> None:
-    """Eager ``--version`` handler, so it answers before credentials are needed."""
+    """Print the distribution name and version, then exit.
+
+    Eager so the flag keeps short-circuiting if another global option later
+    grows a validating callback. ``arbitr-sdk`` is the name to paste into
+    ``pip install`` — the import and the command are both ``arbitr``.
+    """
     if value:
-        typer.echo(f"arbitr {__version__}")
+        typer.echo(f"arbitr-sdk {__version__}")
         raise typer.Exit
 
 
