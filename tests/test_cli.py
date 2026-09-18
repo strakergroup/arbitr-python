@@ -194,13 +194,15 @@ def test_api_key_flag_is_not_accepted(runner: CliRunner) -> None:
 def test_version_flag_prints_the_packaged_version(runner: CliRunner) -> None:
     result = runner.invoke(app, ["--version"], env={"ARBITR_API_KEY": "", "arbitr_api_key": ""})
     assert result.exit_code == 0
-    assert result.output.strip() == f"arbitr {arbitr.__version__}"
+    assert result.output.strip() == f"arbitr-sdk {arbitr.__version__}"
 
 
 def test_version_flag_does_not_need_a_command(runner: CliRunner) -> None:
-    result = runner.invoke(app, ["--version", "credits"], env=ENV)
+    with respx.mock(base_url="https://api.test") as router:
+        result = runner.invoke(app, ["--version", "credits"], env=ENV)
     assert result.exit_code == 0
     assert arbitr.__version__ in result.output
+    assert not router.calls
 
 
 def test_no_command_prints_usage(runner: CliRunner) -> None:
