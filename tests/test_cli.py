@@ -15,6 +15,7 @@ import respx
 import typer
 from typer.testing import CliRunner, Result
 
+import arbitr
 import arbitr.cli as cli_module
 from arbitr import ArbitrClient
 from arbitr.cli import app
@@ -188,6 +189,18 @@ def test_api_key_flag_is_not_accepted(runner: CliRunner) -> None:
     combined = _ANSI_ESCAPE.sub("", f"{result.output}\n{result.stderr}")
     assert "No such option" in combined
     assert "--api-key" in combined
+
+
+def test_version_flag_prints_the_packaged_version(runner: CliRunner) -> None:
+    result = runner.invoke(app, ["--version"], env={"ARBITR_API_KEY": "", "arbitr_api_key": ""})
+    assert result.exit_code == 0
+    assert result.output.strip() == f"arbitr {arbitr.__version__}"
+
+
+def test_version_flag_does_not_need_a_command(runner: CliRunner) -> None:
+    result = runner.invoke(app, ["--version", "credits"], env=ENV)
+    assert result.exit_code == 0
+    assert arbitr.__version__ in result.output
 
 
 def test_no_command_prints_usage(runner: CliRunner) -> None:

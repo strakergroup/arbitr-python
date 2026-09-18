@@ -31,6 +31,7 @@ from arbitr import (
 )
 from arbitr._credentials import load_host_settings, resolve_cli_max_retries
 from arbitr._http import project_ui_url
+from arbitr._version import __version__
 from arbitr.generated.models import FindingSeverity, FindingStatus
 
 app = typer.Typer(
@@ -50,9 +51,25 @@ class ClientConfig:
     max_retries: int | None
 
 
+def _print_version(value: bool) -> None:
+    """Eager ``--version`` handler, so it answers before credentials are needed."""
+    if value:
+        typer.echo(f"arbitr {__version__}")
+        raise typer.Exit
+
+
 @app.callback()
 def global_options(
     ctx: typer.Context,
+    version: Annotated[
+        bool,
+        typer.Option(
+            "--version",
+            callback=_print_version,
+            is_eager=True,
+            help="show the installed version and exit",
+        ),
+    ] = False,
     base_url: Annotated[
         str | None, typer.Option("--base-url", help="override ARBITR_BASE_URL / .env")
     ] = None,
