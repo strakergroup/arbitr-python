@@ -20,7 +20,7 @@ live API calls.
 The client wraps the published OpenAPI surface only, pinned from production:
 
 ```bash
-curl -sS https://api-arbitr.straker.ai/openapi.json -o src/arbitr/openapi.json
+curl -sS https://api.arbitr.ai/openapi.json -o src/arbitr/openapi.json
 uv run python scripts/generate_models.py
 ```
 

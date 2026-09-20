@@ -5,7 +5,7 @@ description: >-
   a user wants to set up Arbitr, translate local files, create or monitor a
   translation project, download deliverables, or check API-key access.
 license: MIT
-compatibility: Requires Python 3.11+, terminal access, and network access to https://api-arbitr.straker.ai
+compatibility: Requires Python 3.11+, terminal access, and network access to https://api.arbitr.ai
 metadata:
   author: strakergroup
   version: "1.0"
@@ -31,7 +31,7 @@ Do not submit a translation project as part of setup.
 Keys are created only at:
 
 ```text
-https://arbitr.straker.ai/settings/api-keys
+https://app.arbitr.ai/settings/api-keys
 ```
 
 Never ask the user to paste a key into chat. Ask them to store it locally as

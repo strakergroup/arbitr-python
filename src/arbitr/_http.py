@@ -13,6 +13,8 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 
 from arbitr._constants import (
+    DEFAULT_BASE_URL,
+    DEFAULT_UI_URL,
     RETRY_BACKOFF_BASE_SECONDS,
     RETRY_BACKOFF_MAX_SECONDS,
     RETRY_STATUS_CODES,
@@ -139,12 +141,16 @@ async def awrite_download_file(dest: Path, chunks: AsyncIterator[bytes]) -> None
 
 
 def derive_ui_url(api_base: str) -> str:
-    """Best-effort UI host from the API host.
+    """UI host for an API host.
 
-    Strips a leading ``api-`` or ``api.`` from the hostname
-    (``api-arbitr.straker.ai`` → ``arbitr.straker.ai``).
+    The production pair is a lookup, not a guess: ``api.arbitr.ai`` deep-links to
+    ``app.arbitr.ai``, and stripping the ``api.`` would land on the marketing site.
+    Every other host falls back to stripping a leading ``api-`` or ``api.``
+    (``api-foo.example.com`` → ``foo.example.com``).
     Override with ``ui_base_url`` / ``ARBITR_UI_URL`` when the UI lives elsewhere.
     """
+    if api_base.rstrip("/") == DEFAULT_BASE_URL:
+        return DEFAULT_UI_URL
     parts = urlsplit(api_base)
     host = parts.netloc
     if "-api-" in host:

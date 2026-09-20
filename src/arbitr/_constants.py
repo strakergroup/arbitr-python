@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import Literal
 
-DEFAULT_BASE_URL = "https://api-arbitr.straker.ai"
+DEFAULT_BASE_URL = "https://api.arbitr.ai"
+DEFAULT_UI_URL = "https://app.arbitr.ai"
 
 TERMINAL_STATUSES = frozenset({"cancelled", "completed", "published", "failed"})
 ACTION_REQUIRED_STATUSES = frozenset({"agent_selection", "awaiting_payment"})

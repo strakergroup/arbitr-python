@@ -645,18 +645,19 @@ async def test_async_key_mode_and_repr_hide_the_key() -> None:
 
 
 async def test_async_ui_url_derivation() -> None:
-    async with AsyncArbitrClient(api_key="k", base_url="https://api-arbitr.straker.ai") as client:
-        assert client.ui_base_url == "https://arbitr.straker.ai"
-        assert client.project_url("p1") == "https://arbitr.straker.ai/projects/p1"
+    async with AsyncArbitrClient(api_key="k", base_url="https://api-foo.example.com") as client:
+        assert client.ui_base_url == "https://foo.example.com"
+        assert client.project_url("p1") == "https://foo.example.com/projects/p1"
         assert (
-            client.project_url("p1", view="agents")
-            == "https://arbitr.straker.ai/projects/p1/agents"
+            client.project_url("p1", view="agents") == "https://foo.example.com/projects/p1/agents"
         )
 
 
-async def test_async_default_base_url_is_prod() -> None:
+async def test_async_default_hosts_are_the_production_pair() -> None:
+    """The API host and the UI host it deep-links to must move together."""
     async with AsyncArbitrClient(api_key="k") as client:
-        assert client.base_url == "https://api-arbitr.straker.ai"
+        assert client.base_url == "https://api.arbitr.ai"
+        assert client.ui_base_url == "https://app.arbitr.ai"
 
 
 async def test_async_context_manager_closes_the_transport() -> None:

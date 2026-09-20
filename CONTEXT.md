@@ -20,7 +20,7 @@ Prepaid capacity consumed when a live API key submits a Project.
 _Avoid_: Token, quota (use scope for key permissions)
 
 **API key**:
-Credential minted at https://arbitr.straker.ai/settings/api-keys. Live keys
+Credential minted at https://app.arbitr.ai/settings/api-keys. Live keys
 spend credits; sandbox keys do not.
 _Avoid_: Token, secret (except the webhook signing secret)
 

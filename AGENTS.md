@@ -31,14 +31,14 @@ Right: `Serialize chain-of-custody timestamps with a UTC offset`
   `scripts/check_operation_coverage.py` and `tests/test_operation_coverage.py`
   — edit them in that one place. Prefer an empty ignore set; only add an id
   when it is still published but must not grow a wrapper.
-- After `https://api-arbitr.straker.ai/openapi.json` changes, refresh
+- After `https://api.arbitr.ai/openapi.json` changes, refresh
   `src/arbitr/openapi.json` (it ships inside the package; read it with
   `arbitr.pinned_spec()`), regenerate models, add methods on **both**
   `ArbitrClient` and `AsyncArbitrClient`, and mirror the tests in
   `tests/test_client.py` and `tests/test_async_client.py`.
 - Do not hand-edit `src/arbitr/generated/`.
 - Do not implement sync by calling `asyncio.run` on the async client.
-- Default base URL is `https://api-arbitr.straker.ai`. Pin OpenAPI from that
+- Default base URL is `https://api.arbitr.ai`. Pin OpenAPI from that
   host. README, CLI help, comments, and examples mention only that public
   API host.
 - Every error derives from `ArbitrBaseError`. Never let an `httpx` exception
