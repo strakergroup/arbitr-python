@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from typing import TYPE_CHECKING, Any, ClassVar
+from urllib.parse import urlsplit
 
 import httpx
 from pydantic import ValidationError as PydanticValidationError
@@ -320,11 +321,32 @@ def _parse_error_envelope(resp: httpx.Response) -> dict[str, Any]:
     return envelope if isinstance(envelope, dict) else {}
 
 
+def _redirect_origin(resp: httpx.Response) -> str | None:
+    """Scheme and host from a redirect's ``Location``, when it carries one."""
+    location = resp.headers.get("location")
+    if not location:
+        return None
+    parts = urlsplit(location)
+    if not parts.scheme or not parts.netloc:
+        return None
+    return f"{parts.scheme}://{parts.netloc}"
+
+
 def from_response(resp: httpx.Response) -> ArbitrError:
     """Build the most specific ArbitrError from an error response."""
     envelope = _parse_error_envelope(resp)
     code = envelope.get("code") or "http_error"
     message = envelope.get("message") or (resp.text[:500] if resp.text else resp.reason_phrase)
+
+    if 300 <= resp.status_code < 400:
+        moved_to = _redirect_origin(resp)
+        if moved_to is not None:
+            code = "moved"
+            message = (
+                f"the API moved to {moved_to} — point base_url / ARBITR_BASE_URL "
+                "there. Redirects are not followed: httpx does not strip the "
+                "X-API-Key header across hosts."
+            )
     field_errors = envelope.get("field_errors")
 
     retry_after: float | None = None
