@@ -38,6 +38,7 @@ from arbitr import (
     ValidationError,
     WebhookVerificationError,
 )
+from arbitr.errors import from_response
 
 EVERY_ERROR = [
     ActionRequiredError,
@@ -265,3 +266,22 @@ def test_missing_api_key_is_still_an_input_error() -> None:
         ArbitrClient(api_key="")
     assert isinstance(raised.value, ClientInputError)
     assert isinstance(raised.value, ArbitrBaseError)
+
+
+def test_redirect_names_the_host_that_replaced_this_one() -> None:
+    """A moved API must say where it moved.
+
+    The client does not follow redirects on purpose — httpx would forward
+    X-API-Key across hosts. That is only a clean break if the error names the
+    replacement instead of a bare "Moved Permanently".
+    """
+    resp = httpx.Response(
+        301,
+        headers={"Location": "https://api.arbitr.ai/v1/me"},
+        request=httpx.Request("GET", "https://api-arbitr.straker.ai/v1/me"),
+    )
+    err = from_response(resp)
+    assert err.status_code == 301
+    assert err.code == "moved"
+    assert "https://api.arbitr.ai" in str(err)
+    assert "ARBITR_BASE_URL" in str(err)

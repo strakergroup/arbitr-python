@@ -61,3 +61,12 @@ def test_types_reachable_from_exported_models_are_exported() -> None:
         if referenced.__module__ == GENERATED_MODULE and referenced.__name__ not in arbitr.__all__
     }
     assert not missing, f"reachable but not exported: {sorted(missing)}"
+
+
+def test_the_ui_host_is_public_like_the_api_host() -> None:
+    """Both halves of the production pair are importable from the package."""
+    from arbitr import DEFAULT_BASE_URL, DEFAULT_UI_URL
+
+    assert DEFAULT_BASE_URL == "https://api.arbitr.ai"
+    assert DEFAULT_UI_URL == "https://app.arbitr.ai"
+    assert "DEFAULT_UI_URL" in arbitr.__all__
