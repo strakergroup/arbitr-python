@@ -10,7 +10,7 @@ pip install arbitr-sdk
 
 The PyPI package is `arbitr-sdk`. The import and CLI stay `arbitr`. Python 3.11 or newer.
 
-Mint a key at [https://arbitr.straker.ai/settings/api-keys](https://arbitr.straker.ai/settings/api-keys)
+Mint a key at [https://app.arbitr.ai/settings/api-keys](https://app.arbitr.ai/settings/api-keys)
 and store it as `ARBITR_API_KEY` in the environment or a `.env` file. Submit and
 download need both `verify:submit` and `verify:read`. A test key (`abr_test_...`)
 checks auth and request shape without running the pipeline or spending credits —
@@ -42,7 +42,9 @@ async with AsyncArbitrClient.from_env() as client:
     me = await client.me()
 ```
 
-Default host is production: `https://api-arbitr.straker.ai`.
+Default host is production: `https://api.arbitr.ai`, deep-linking to the UI at
+`https://app.arbitr.ai`. The former `*-arbitr.straker.ai` hosts redirect; the
+client does not follow redirects, so drop any `base_url` override still naming them.
 
 Language codes are lowercase BCP-47 tags (`ko-kr`, `fr-fr`). Bare codes (`ko`)
 are rejected by the API — `client.languages.resolve(["ko"])` expands them, or

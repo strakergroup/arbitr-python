@@ -2,7 +2,7 @@
 
 Credentials come from the environment (ARBITR_API_KEY / ARBITR_BASE_URL) or a
 dotenv file (default: ./.env). Mint a key at
-https://arbitr.straker.ai/settings/api-keys
+https://app.arbitr.ai/settings/api-keys
 
 Exit codes: 0 ok, 1 API error, 2 usage/config/network/timeout, 3 project is
 waiting on a person (agent_selection or awaiting_payment) and cannot proceed

@@ -118,7 +118,7 @@ def load_client_settings(
         raise MissingApiKeyError(
             "No API key found. Set ARBITR_API_KEY in the environment or "
             "arbitr_api_key in the env file. Mint a key at "
-            "https://arbitr.straker.ai/settings/api-keys"
+            "https://app.arbitr.ai/settings/api-keys"
         )
     return ClientSettings(
         api_key=key,

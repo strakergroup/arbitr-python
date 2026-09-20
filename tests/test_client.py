@@ -788,10 +788,10 @@ def test_unsupported_upload_422_carries_supported_formats() -> None:
 
 
 def test_ui_url_derivation() -> None:
-    c = ArbitrClient(api_key="k", base_url="https://api-arbitr.straker.ai")
-    assert c.ui_base_url == "https://arbitr.straker.ai"
-    assert c.project_url("p1") == "https://arbitr.straker.ai/projects/p1"
-    assert c.project_url("p1", view="agents") == "https://arbitr.straker.ai/projects/p1/agents"
+    c = ArbitrClient(api_key="k", base_url="https://api-foo.example.com")
+    assert c.ui_base_url == "https://foo.example.com"
+    assert c.project_url("p1") == "https://foo.example.com/projects/p1"
+    assert c.project_url("p1", view="agents") == "https://foo.example.com/projects/p1/agents"
 
     c2 = ArbitrClient(api_key="k", base_url="https://api.arbitr.com")
     assert c2.ui_base_url == "https://arbitr.com"
@@ -837,7 +837,7 @@ def test_from_env_without_key_raises_precise_error(
     monkeypatch.delenv("arbitr_api_key", raising=False)
     with pytest.raises(MissingApiKeyError, match="ARBITR_API_KEY") as missing:
         ArbitrClient.from_env(tmp_path / "absent.env")
-    assert "https://arbitr.straker.ai/settings/api-keys" in str(missing.value)
+    assert "https://app.arbitr.ai/settings/api-keys" in str(missing.value)
 
 
 def test_empty_key_raises_precise_error() -> None:
@@ -845,9 +845,11 @@ def test_empty_key_raises_precise_error() -> None:
         ArbitrClient(api_key="")
 
 
-def test_default_base_url_is_prod() -> None:
+def test_default_hosts_are_the_production_pair() -> None:
+    """The API host and the UI host it deep-links to must move together."""
     client = ArbitrClient(api_key="k")
-    assert client.base_url == "https://api-arbitr.straker.ai"
+    assert client.base_url == "https://api.arbitr.ai"
+    assert client.ui_base_url == "https://app.arbitr.ai"
 
 
 def test_client_input_errors_are_not_value_error() -> None:
