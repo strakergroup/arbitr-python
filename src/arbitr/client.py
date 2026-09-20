@@ -101,6 +101,9 @@ class ArbitrClient:
             timeout=timeout,
             transport=transport,
             headers=default_headers(api_key, api_version),
+            # httpx keeps X-API-Key on a cross-host redirect; a moved API is an
+            # ApiMovedError for the caller to fix, never a forwarded key.
+            follow_redirects=False,
         )
         self.projects = ProjectsAPI(self)
         self.languages = LanguagesAPI(self)
@@ -468,6 +471,8 @@ def _stream_download(
                 if delay is not None:
                     resp.read()
                 else:
+                    if not resp.is_success:
+                        resp.read()  # from_response parses the body
                     raise_for_status(resp)
                     write_download_file(dest, resp.iter_bytes())
                     return dest

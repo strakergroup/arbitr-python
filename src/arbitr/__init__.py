@@ -19,6 +19,7 @@ from arbitr.client import ArbitrClient, new_idempotency_key
 from arbitr.errors import (
     ActionRequiredError,
     AmbiguousLocaleCodesError,
+    ApiMovedError,
     ArbitrBaseError,
     ArbitrClientError,
     ArbitrError,
@@ -94,6 +95,7 @@ __all__ = [
     "AgentFinding",
     "AmbiguousLocaleCodesError",
     "ApiKeyMode",
+    "ApiMovedError",
     "ArbitrBaseError",
     "ArbitrClient",
     "ArbitrClientError",

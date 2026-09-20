@@ -37,7 +37,8 @@ jobs:
       - run: uv sync --frozen
       # Exit 1 is real drift (fail immediately). Exit 2 is unreadable prod
       # (retry). Exit 3 is an unexpected script failure. Exit 4 is an
-      # unreadable packaged pin (fail immediately; not a prod flake).
+      # unreadable packaged pin (fail immediately; not a prod flake). Exit 5
+      # is production redirecting elsewhere: the host moved (fail immediately).
       - name: Compare pin to production OpenAPI
         run: |
           for attempt in 1 2 3; do
@@ -57,6 +58,10 @@ jobs:
                 ;;
               4)
                 echo "::error::Packaged OpenAPI pin could not be read (exit 4). This is not production drift."
+                exit 1
+                ;;
+              5)
+                echo "::error::Production OpenAPI redirects to another host (exit 5). Update DEFAULT_BASE_URL, re-pin src/arbitr/openapi.json, and bump the version."
                 exit 1
                 ;;
             esac

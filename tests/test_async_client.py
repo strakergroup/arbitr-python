@@ -20,6 +20,7 @@ from arbitr import (
     SUPPORTED_FORMATS,
     ActionRequiredError,
     AmbiguousLocaleCodesError,
+    ApiMovedError,
     AsyncArbitrClient,
     BareLocaleCodeError,
     ClientInputError,
@@ -618,6 +619,39 @@ async def test_async_redirect_is_not_success() -> None:
         with pytest.raises(Exception) as raised:
             await client.get_json("/v1/me")
     assert getattr(raised.value, "status_code", None) == 302
+
+
+async def test_async_redirects_are_never_followed() -> None:
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(301, headers={"location": "https://evil.example/v1/me"})
+
+    async with make_client(handler) as client:
+        with pytest.raises(ApiMovedError) as raised:
+            await client.get_json("/v1/me")
+    assert raised.value.moved_to == "https://evil.example"
+    assert seen == ["https://api.test/v1/me"]
+
+
+async def test_async_streamed_download_from_a_moved_host_names_the_new_one(
+    tmp_path: Path,
+) -> None:
+    dest = tmp_path / "out.zip"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            301,
+            headers={"location": "https://api.arbitr.ai/v1/projects/p/deliverables/d-1"},
+            stream=httpx.ByteStream(b"<html>moved</html>"),
+        )
+
+    async with make_client(handler) as client:
+        with pytest.raises(ApiMovedError) as raised:
+            await client.projects.download_deliverable("p", "d-1", dest)
+    assert raised.value.moved_to == "https://api.arbitr.ai"
+    assert not dest.exists()
 
 
 async def test_async_from_env_reads_dotenv(tmp_path: Path) -> None:

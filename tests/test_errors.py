@@ -10,6 +10,7 @@ import pytest
 from arbitr import (
     ActionRequiredError,
     AmbiguousLocaleCodesError,
+    ApiMovedError,
     ArbitrBaseError,
     ArbitrClient,
     ArbitrClientError,
@@ -43,6 +44,7 @@ from arbitr.errors import from_response
 EVERY_ERROR = [
     ActionRequiredError,
     AmbiguousLocaleCodesError,
+    ApiMovedError,
     ArbitrClientError,
     ArbitrError,
     AuthenticationError,
@@ -268,6 +270,14 @@ def test_missing_api_key_is_still_an_input_error() -> None:
     assert isinstance(raised.value, ArbitrBaseError)
 
 
+def _redirect(status: int, location: str, *, requested: str) -> httpx.Response:
+    return httpx.Response(
+        status,
+        headers={"Location": location},
+        request=httpx.Request("GET", requested),
+    )
+
+
 def test_redirect_names_the_host_that_replaced_this_one() -> None:
     """A moved API must say where it moved.
 
@@ -275,13 +285,68 @@ def test_redirect_names_the_host_that_replaced_this_one() -> None:
     X-API-Key across hosts. That is only a clean break if the error names the
     replacement instead of a bare "Moved Permanently".
     """
-    resp = httpx.Response(
-        301,
-        headers={"Location": "https://api.arbitr.ai/v1/me"},
-        request=httpx.Request("GET", "https://api-arbitr.straker.ai/v1/me"),
+    err = from_response(
+        _redirect(
+            301, "https://api.arbitr.ai/v1/me", requested="https://api-arbitr.straker.ai/v1/me"
+        )
     )
-    err = from_response(resp)
+    assert isinstance(err, ApiMovedError)
     assert err.status_code == 301
     assert err.code == "moved"
+    assert err.moved_to == "https://api.arbitr.ai"
     assert "https://api.arbitr.ai" in str(err)
     assert "ARBITR_BASE_URL" in str(err)
+
+
+def test_scheme_relative_location_still_names_the_new_host() -> None:
+    err = from_response(
+        _redirect(301, "//api.arbitr.ai/v1/me", requested="https://api-arbitr.straker.ai/v1/me")
+    )
+    assert isinstance(err, ApiMovedError)
+    assert err.moved_to == "https://api.arbitr.ai"
+
+
+@pytest.mark.parametrize(
+    ("status", "location"),
+    [
+        # Production canonicalises a trailing slash with a same-host 307.
+        (307, "http://api.arbitr.ai/v1/languages"),
+        (301, "https://api.arbitr.ai/v1/languages"),
+        (301, "/v1/languages"),
+    ],
+)
+def test_same_host_redirect_is_not_a_move(status: int, location: str) -> None:
+    err = from_response(
+        _redirect(status, location, requested="https://api.arbitr.ai/v1/languages/")
+    )
+    assert not isinstance(err, ApiMovedError)
+    assert type(err) is ArbitrError
+    assert err.status_code == status
+    assert err.code == "http_error"
+
+
+def test_temporary_cross_host_redirect_is_not_a_move() -> None:
+    """A 302 to storage on a download is not the API relocating."""
+    err = from_response(
+        _redirect(
+            302,
+            "https://bucket.s3.amazonaws.com/deliverable.zip",
+            requested="https://api.arbitr.ai/v1/projects/p/deliverables/d",
+        )
+    )
+    assert not isinstance(err, ApiMovedError)
+    assert err.status_code == 302
+
+
+@pytest.mark.parametrize("location", ["https://[bad/v1/me", "", "   "])
+def test_unusable_location_is_still_an_arbitr_error(location: str) -> None:
+    """A garbage Location header must not escape as a builtin ValueError."""
+    err = from_response(_redirect(301, location, requested="https://api-arbitr.straker.ai/v1/me"))
+    assert type(err) is ArbitrError
+    assert err.status_code == 301
+
+
+def test_redirect_without_a_request_is_a_plain_error() -> None:
+    resp = httpx.Response(301, headers={"Location": "https://api.arbitr.ai/v1/me"})
+    err = from_response(resp)
+    assert type(err) is ArbitrError
