@@ -1,13 +1,4 @@
-"""arbitr — CLI for the Arbitr External API.
-
-Credentials come from the environment (ARBITR_API_KEY / ARBITR_BASE_URL) or a
-dotenv file (default: ./.env). Mint a key at
-https://app.arbitr.ai/settings/api-keys
-
-Exit codes: 0 ok, 1 API error, 2 usage/config/network/timeout, 3 project is
-waiting on a person (agent_selection or awaiting_payment) and cannot proceed
-until they act.
-"""
+"""arbitr — CLI for the Arbitr External API. See ``CLI_HELP`` for the contract."""
 
 from __future__ import annotations
 
@@ -22,6 +13,7 @@ from pydantic import BaseModel
 
 from arbitr import (
     ActionRequiredError,
+    ApiMovedError,
     ArbitrClient,
     ArbitrClientError,
     ArbitrError,
@@ -29,14 +21,26 @@ from arbitr import (
     ProjectWaitTimeoutError,
     TransportError,
 )
+from arbitr._constants import API_KEYS_URL
 from arbitr._credentials import load_host_settings, resolve_cli_max_retries
 from arbitr._http import project_ui_url
 from arbitr._version import __version__
 from arbitr.generated.models import FindingSeverity, FindingStatus
 
+CLI_HELP = f"""arbitr — CLI for the Arbitr External API.
+
+Credentials come from the environment (ARBITR_API_KEY / ARBITR_BASE_URL) or a
+dotenv file (default: ./.env). Mint a key at
+{API_KEYS_URL}
+
+Exit codes: 0 ok, 1 API error, 2 usage/config/network/timeout, 3 project is
+waiting on a person (agent_selection or awaiting_payment) and cannot proceed
+until they act.
+"""
+
 app = typer.Typer(
     name="arbitr",
-    help=__doc__,
+    help=CLI_HELP,
     no_args_is_help=False,
     add_completion=False,
 )
@@ -141,6 +145,10 @@ def execute(ctx: typer.Context, operation: Callable[[ArbitrClient], Any]) -> Non
             result = operation(client)
     except ClientInputError as exc:
         typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(2) from exc
+    except ApiMovedError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        typer.echo(f"hint: set --base-url / ARBITR_BASE_URL to {exc.moved_to}", err=True)
         raise typer.Exit(2) from exc
     except ArbitrError as exc:
         payload: dict[str, Any] = {"code": exc.code, "message": exc.message}

@@ -9,7 +9,12 @@ CI entrypoint.
 
 Exit 0 if they match after canonicalize, 1 on drift, 2 when the live
 spec is unreadable (CI retries), 3 on unexpected script failures, 4 when
-the packaged pin is unreadable (fail immediately; not a prod flake).
+the packaged pin is unreadable (fail immediately; not a prod flake), 5 when
+production redirects elsewhere (the host moved; fail immediately).
+
+Redirects are not followed. Following one is how the last host move stayed
+green: the old host 301'd to the new one, the specs matched, and the client
+— which never follows redirects — was left pointing at a dead default.
 """
 
 from __future__ import annotations
@@ -37,10 +42,15 @@ EXIT_DRIFT = 1
 EXIT_UNREADABLE = 2
 EXIT_UNEXPECTED = 3
 EXIT_PIN_UNREADABLE = 4
+EXIT_MOVED = 5
 
 
 class SpecFetchError(Exception):
     """The live OpenAPI URL could not be fetched."""
+
+
+class SpecMovedError(Exception):
+    """The live OpenAPI URL redirects: production moved hosts."""
 
 
 class SpecReadError(Exception):
@@ -62,11 +72,17 @@ def fetch_openapi_url(url: str) -> dict[str, object]:
     """GET ``url`` and parse it as an OpenAPI object.
 
     Raises:
+        SpecMovedError: If the URL redirects; the default host is stale.
         SpecFetchError: On transport or HTTP failure.
         OpenAPIDocumentError: If the body is not a JSON object.
     """
     try:
-        response = httpx.get(url, timeout=_FETCH_TIMEOUT_SECONDS, follow_redirects=True)
+        response = httpx.get(url, timeout=_FETCH_TIMEOUT_SECONDS, follow_redirects=False)
+        if response.is_redirect:
+            raise SpecMovedError(
+                f"{url} redirects to {response.headers.get('location', '?')}: "
+                "production moved; update DEFAULT_BASE_URL and re-pin the spec"
+            )
         response.raise_for_status()
     except httpx.HTTPError as exc:
         raise SpecFetchError(f"failed to fetch {url}") from exc
@@ -119,6 +135,9 @@ def main(argv: list[str] | None = None) -> int:
         else:
             live = fetch_openapi_url(args.url or PROD_OPENAPI_URL)
         diff = openapi_document_diff(pin, live)
+    except SpecMovedError as exc:
+        _print_cli_error(exc)
+        return EXIT_MOVED
     except (SpecFetchError, SpecReadError, OpenAPIDocumentError) as exc:
         _print_cli_error(exc)
         return EXIT_UNREADABLE

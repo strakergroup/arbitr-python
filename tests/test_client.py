@@ -13,9 +13,11 @@ import httpx
 import pytest
 
 from arbitr import (
+    DEFAULT_UI_URL,
     SUPPORTED_FORMATS,
     ActionRequiredError,
     AmbiguousLocaleCodesError,
+    ApiMovedError,
     ArbitrBaseError,
     ArbitrClient,
     ArbitrClientError,
@@ -447,6 +449,54 @@ def test_redirect_is_not_success() -> None:
     assert exc.value.status_code == 302
 
 
+def test_redirects_are_never_followed() -> None:
+    """Following a redirect would forward X-API-Key to whatever host it names."""
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(301, headers={"location": "https://evil.example/v1/me"})
+
+    client = make_client(handler)
+    with pytest.raises(ApiMovedError) as raised:
+        client.get_json("/v1/me")
+    assert raised.value.moved_to == "https://evil.example"
+    assert seen == ["https://api.test/v1/me"]
+
+
+def test_streamed_download_from_a_moved_host_names_the_new_one(tmp_path: Any) -> None:
+    """Downloads stream the body, so the error path must read it before parsing."""
+    dest = tmp_path / "out.zip"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            301,
+            headers={"location": "https://api.arbitr.ai/v1/projects/p/deliverables/d-1"},
+            stream=httpx.ByteStream(b"<html>moved</html>"),
+        )
+
+    client = make_client(handler)
+    with pytest.raises(ApiMovedError) as raised:
+        client.projects.download_deliverable("p", "d-1", dest)
+    assert raised.value.moved_to == "https://api.arbitr.ai"
+    assert not dest.exists()
+
+
+def test_streamed_download_error_body_is_read_before_parsing(tmp_path: Any) -> None:
+    dest = tmp_path / "out.zip"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            404,
+            stream=httpx.ByteStream(b'{"error": {"code": "not_found", "message": "gone"}}'),
+            headers={"content-type": "application/json"},
+        )
+
+    client = make_client(handler)
+    with pytest.raises(NotFoundError, match="gone"):
+        client.projects.download_deliverable("p", "d-1", dest)
+
+
 def test_error_envelope_maps_to_typed_errors() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/missing":
@@ -837,7 +887,7 @@ def test_from_env_without_key_raises_precise_error(
     monkeypatch.delenv("arbitr_api_key", raising=False)
     with pytest.raises(MissingApiKeyError, match="ARBITR_API_KEY") as missing:
         ArbitrClient.from_env(tmp_path / "absent.env")
-    assert "https://app.arbitr.ai/settings/api-keys" in str(missing.value)
+    assert f"{DEFAULT_UI_URL}/settings/api-keys" in str(missing.value)
 
 
 def test_empty_key_raises_precise_error() -> None:

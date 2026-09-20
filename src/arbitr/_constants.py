@@ -6,6 +6,7 @@ from typing import Literal
 
 DEFAULT_BASE_URL = "https://api.arbitr.ai"
 DEFAULT_UI_URL = "https://app.arbitr.ai"
+API_KEYS_URL = f"{DEFAULT_UI_URL}/settings/api-keys"
 
 TERMINAL_STATUSES = frozenset({"cancelled", "completed", "published", "failed"})
 ACTION_REQUIRED_STATUSES = frozenset({"agent_selection", "awaiting_payment"})

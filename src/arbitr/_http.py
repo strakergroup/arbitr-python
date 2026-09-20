@@ -8,7 +8,7 @@ import tempfile
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from typing import BinaryIO
-from urllib.parse import SplitResult, urlsplit, urlunsplit
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -141,22 +141,6 @@ async def awrite_download_file(dest: Path, chunks: AsyncIterator[bytes]) -> None
 
 
 _PROD_HOSTNAME = urlsplit(DEFAULT_BASE_URL).hostname
-_DEFAULT_PORTS = frozenset({None, 80, 443})
-
-
-def _is_production_host(parts: SplitResult) -> bool:
-    """Is this URL the production API, however it was spelled?
-
-    Compares the hostname rather than the whole URL so that a different scheme,
-    different casing, or an explicit default port still resolves to the app.
-    Getting this wrong is silent: the strip fallback would return ``arbitr.ai``,
-    the marketing site, and deep links would point there with no error.
-    """
-    try:
-        port = parts.port
-    except ValueError:  # malformed port; not something we can call production
-        return False
-    return parts.hostname == _PROD_HOSTNAME and port in _DEFAULT_PORTS
 
 
 def derive_ui_url(api_base: str) -> str:
@@ -164,14 +148,16 @@ def derive_ui_url(api_base: str) -> str:
 
     The production pair is a lookup, not a guess: ``api.arbitr.ai`` deep-links to
     ``app.arbitr.ai``, and stripping the ``api.`` would land on the marketing site.
+    The hostname compare ignores scheme, casing, and port on purpose — any of
+    those spellings still means production.
     Every other host falls back to stripping a leading ``api-`` or ``api.``
     (``api-foo.example.com`` → ``foo.example.com``).
     Override with ``ui_base_url`` / ``ARBITR_UI_URL`` when the UI lives elsewhere.
     """
     parts = urlsplit(api_base)
-    if _is_production_host(parts):
+    if parts.hostname == _PROD_HOSTNAME:
         return DEFAULT_UI_URL
-    host = parts.netloc
+    host = parts.netloc.lower()
     if "-api-" in host:
         host = host.replace("-api-", "-", 1)
     else:

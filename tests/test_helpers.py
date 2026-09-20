@@ -11,7 +11,12 @@ import pytest
 from pydantic import BaseModel
 
 from arbitr import ArbitrClient, pinned_spec
-from arbitr._constants import ACTION_REQUIRED_STATUSES, TERMINAL_STATUSES
+from arbitr._constants import (
+    ACTION_REQUIRED_STATUSES,
+    DEFAULT_BASE_URL,
+    DEFAULT_UI_URL,
+    TERMINAL_STATUSES,
+)
 from arbitr._coverage import OPERATION_METHODS
 from arbitr._datetime import UtcDatetime
 from arbitr._env import read_env_file
@@ -348,6 +353,9 @@ class TestUiUrlDerivation:
             ("https://API.ARBITR.AI", "https://app.arbitr.ai"),
             ("http://api.arbitr.ai", "https://app.arbitr.ai"),
             ("https://api.arbitr.ai:443", "https://app.arbitr.ai"),
+            ("https://api.arbitr.ai:8443", "https://app.arbitr.ai"),
+            ("https://api.arbitr.ai:abc", "https://app.arbitr.ai"),
+            ("https://API-FOO.example.com", "https://foo.example.com"),
             ("https://api-foo.example.com", "https://foo.example.com"),
             ("https://preview-api-arbitr.example.com", "https://preview-arbitr.example.com"),
             ("https://api.arbitr.com", "https://arbitr.com"),
@@ -357,6 +365,20 @@ class TestUiUrlDerivation:
     )
     def test_derivation(self, api: str, ui: str) -> None:
         assert derive_ui_url(api) == ui
+
+
+class TestEnvExample:
+    """The template users copy must name the current hosts, not the retired ones."""
+
+    text = (Path(__file__).resolve().parents[1] / ".env.example").read_text(encoding="utf-8")
+
+    def test_names_the_current_hosts(self) -> None:
+        assert DEFAULT_BASE_URL in self.text
+        assert DEFAULT_UI_URL in self.text
+        assert f"{DEFAULT_UI_URL}/settings/api-keys" in self.text
+
+    def test_does_not_name_the_retired_hosts(self) -> None:
+        assert "straker.ai" not in self.text
 
 
 class TestPinnedSpec:

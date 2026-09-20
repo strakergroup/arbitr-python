@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from arbitr._constants import DEFAULT_BASE_URL
+from arbitr._constants import API_KEYS_URL, DEFAULT_BASE_URL
 from arbitr._env import pick_env_value, read_env_file
 from arbitr._http import derive_ui_url, parse_max_retries
 from arbitr.errors import ClientInputError, MissingApiKeyError
@@ -117,8 +117,7 @@ def load_client_settings(
     if not key:
         raise MissingApiKeyError(
             "No API key found. Set ARBITR_API_KEY in the environment or "
-            "arbitr_api_key in the env file. Mint a key at "
-            "https://app.arbitr.ai/settings/api-keys"
+            f"arbitr_api_key in the env file. Mint a key at {API_KEYS_URL}"
         )
     return ClientSettings(
         api_key=key,

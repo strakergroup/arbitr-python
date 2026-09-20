@@ -17,7 +17,7 @@ from typer.testing import CliRunner, Result
 
 import arbitr
 import arbitr.cli as cli_module
-from arbitr import ArbitrClient
+from arbitr import DEFAULT_UI_URL, ArbitrClient
 from arbitr.cli import app
 from payloads import (
     agent_finding_json,
@@ -230,6 +230,27 @@ def test_unreachable_host_reports_cleanly(runner: CliRunner) -> None:
     assert "Connection refused" in result.stderr
     assert "GET https://api.test/v1/credits/balance" in result.stderr
     assert "ARBITR_BASE_URL" in result.stderr
+
+
+def test_moved_host_is_a_config_error_naming_the_new_host(runner: CliRunner) -> None:
+    """A stale ARBITR_BASE_URL is fixed by the operator, so it exits 2 like other config errors."""
+    with respx.mock(base_url="https://api.test") as router:
+        route = router.get("/v1/credits/balance").mock(
+            return_value=httpx.Response(
+                301, headers={"location": "https://api.arbitr.ai/v1/credits/balance"}
+            )
+        )
+        result = runner.invoke(app, ["credits"], env=ENV)
+    assert_no_traceback(result, exit_code=2)
+    assert route.call_count == 1
+    assert "https://api.arbitr.ai" in result.stderr
+    assert "ARBITR_BASE_URL" in result.stderr
+
+
+def test_help_names_where_to_mint_a_key(runner: CliRunner) -> None:
+    result = runner.invoke(app, ["--help"], env=ENV)
+    assert result.exit_code == 0
+    assert f"{DEFAULT_UI_URL}/settings/api-keys" in _ANSI_ESCAPE.sub("", result.output)
 
 
 def test_request_timeout_reports_cleanly(runner: CliRunner) -> None:

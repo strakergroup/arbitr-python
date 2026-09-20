@@ -159,6 +159,22 @@ def test_unreachable_url_exits_2(
     assert "Connection refused" in err
 
 
+def test_redirected_url_is_a_host_move_not_a_flake(
+    script: ModuleType, spec_api: respx.MockRouter, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Following the redirect is how the last host move stayed green for days."""
+    route = spec_api.get("/openapi.json").mock(
+        return_value=httpx.Response(
+            301, headers={"location": "https://api.elsewhere.example/openapi.json"}
+        )
+    )
+    assert script.main(["--url", _SPEC_URL]) == script.EXIT_MOVED
+    assert route.call_count == 1
+    err = capsys.readouterr().err
+    assert "https://api.elsewhere.example/openapi.json" in err
+    assert "DEFAULT_BASE_URL" in err
+
+
 def test_server_error_from_url_exits_2(
     script: ModuleType, spec_api: respx.MockRouter, capsys: pytest.CaptureFixture[str]
 ) -> None:

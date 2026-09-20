@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 from typing import TYPE_CHECKING, Any, ClassVar
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import httpx
 from pydantic import ValidationError as PydanticValidationError
@@ -103,6 +103,24 @@ class NotFoundError(ArbitrError):
 
 class GoneError(ArbitrError):
     """410 — the route passed its sunset date; move to its replacement."""
+
+
+class ApiMovedError(ArbitrError):
+    """301/308 to another host — the API relocated; point ``base_url`` at ``moved_to``.
+
+    Redirects are never followed: httpx keeps ``X-API-Key`` on a cross-host
+    redirect, so following one would hand the key to whatever host the
+    redirect names. Fix the configuration instead.
+    """
+
+    def __init__(self, status_code: int, moved_to: str) -> None:
+        super().__init__(
+            status_code,
+            "moved",
+            f"the API moved to {moved_to}; set base_url / ARBITR_BASE_URL to it "
+            "(redirects are not followed)",
+        )
+        self.moved_to = moved_to
 
 
 class ConflictError(ArbitrError):
@@ -321,32 +339,42 @@ def _parse_error_envelope(resp: httpx.Response) -> dict[str, Any]:
     return envelope if isinstance(envelope, dict) else {}
 
 
-def _redirect_origin(resp: httpx.Response) -> str | None:
-    """Scheme and host from a redirect's ``Location``, when it carries one."""
-    location = resp.headers.get("location")
+_PERMANENT_REDIRECTS = frozenset({301, 308})
+
+
+def _moved_origin(resp: httpx.Response) -> str | None:
+    """Origin a permanent redirect points at, when it is a different host.
+
+    Same-host redirects (production canonicalises a trailing slash with one)
+    and temporary redirects are not the API relocating, so they return None.
+    """
+    if resp.status_code not in _PERMANENT_REDIRECTS:
+        return None
+    location = resp.headers.get("location", "").strip()
     if not location:
         return None
-    parts = urlsplit(location)
-    if not parts.scheme or not parts.netloc:
+    try:
+        request_url = resp.request.url
+    except RuntimeError:  # hand-built response with no request attached
         return None
-    return f"{parts.scheme}://{parts.netloc}"
+    try:
+        target = urlsplit(urljoin(str(request_url), location))
+    except ValueError:  # malformed Location; nothing to point the user at
+        return None
+    if not target.scheme or not target.hostname or target.hostname == request_url.host:
+        return None
+    return urlunsplit((target.scheme, target.netloc, "", "", ""))
 
 
 def from_response(resp: httpx.Response) -> ArbitrError:
     """Build the most specific ArbitrError from an error response."""
+    moved_to = _moved_origin(resp)
+    if moved_to is not None:
+        return ApiMovedError(resp.status_code, moved_to)
+
     envelope = _parse_error_envelope(resp)
     code = envelope.get("code") or "http_error"
     message = envelope.get("message") or (resp.text[:500] if resp.text else resp.reason_phrase)
-
-    if 300 <= resp.status_code < 400:
-        moved_to = _redirect_origin(resp)
-        if moved_to is not None:
-            code = "moved"
-            message = (
-                f"the API moved to {moved_to} — point base_url / ARBITR_BASE_URL "
-                "there. Redirects are not followed: httpx does not strip the "
-                "X-API-Key header across hosts."
-            )
     field_errors = envelope.get("field_errors")
 
     retry_after: float | None = None

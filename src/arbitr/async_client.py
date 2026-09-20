@@ -95,6 +95,9 @@ class AsyncArbitrClient:
             timeout=timeout,
             transport=transport,
             headers=default_headers(api_key, api_version),
+            # httpx keeps X-API-Key on a cross-host redirect; a moved API is an
+            # ApiMovedError for the caller to fix, never a forwarded key.
+            follow_redirects=False,
         )
         self.projects = AsyncProjectsAPI(self)
         self.languages = AsyncLanguagesAPI(self)
@@ -466,6 +469,8 @@ async def _astream_download(
                 if delay is not None:
                     await resp.aread()
                 else:
+                    if not resp.is_success:
+                        await resp.aread()  # from_response parses the body
                     raise_for_status(resp)
                     await awrite_download_file(dest, resp.aiter_bytes())
                     return dest
