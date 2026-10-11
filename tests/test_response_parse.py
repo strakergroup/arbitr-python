@@ -9,8 +9,15 @@ import pytest
 
 from arbitr import ProjectResponse, ResponseDecodeError, ResponseParseError
 from arbitr._parse import decode_json_body, parse_response
-from arbitr.generated.models import AgentFinding, FindingListResponse, FindingType, FlagFinding
-from payloads import agent_finding_json, flag_finding_json, project_json
+from arbitr.generated.models import (
+    AgentFinding,
+    FindingListResponse,
+    FindingType,
+    FlagFinding,
+    HumanReviewResponse,
+    HumanReviewStatus,
+)
+from payloads import agent_finding_json, flag_finding_json, human_review_json, project_json
 
 
 def test_parse_response_accepts_required_fields() -> None:
@@ -64,6 +71,12 @@ def test_agent_finding_accepts_repaired_type() -> None:
 def test_agent_finding_accepts_rewrite_type() -> None:
     model = AgentFinding.model_validate(agent_finding_json(finding_type="rewrite"))
     assert model.finding_type is FindingType.rewrite
+
+
+def test_human_review_accepts_restoring_formatting_status() -> None:
+    model = HumanReviewResponse.model_validate(human_review_json(status="restoring_formatting"))
+    assert model.status is HumanReviewStatus.restoring_formatting
+    assert HumanReviewStatus.is_known("restoring_formatting")
 
 
 def test_agent_finding_accepts_a_finding_type_this_build_does_not_know() -> None:
