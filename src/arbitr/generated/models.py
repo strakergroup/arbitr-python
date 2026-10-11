@@ -171,6 +171,7 @@ class HumanReviewStatus(TolerantStrEnum):
     failed = "failed"
     cancelled = "cancelled"
     awaiting_payment = "awaiting_payment"
+    restoring_formatting = "restoring_formatting"
 
 
 class HumanReviewResponse(BaseModel):
