@@ -73,6 +73,18 @@ def test_agent_finding_accepts_rewrite_type() -> None:
     assert model.finding_type is FindingType.rewrite
 
 
+def test_agent_finding_accepts_rule_violation_type() -> None:
+    model = AgentFinding.model_validate(agent_finding_json(finding_type="rule_violation"))
+    assert model.finding_type is FindingType.rule_violation
+    assert FindingType.is_known("rule_violation")
+
+
+def test_human_review_accepts_skipped_status() -> None:
+    model = HumanReviewResponse.model_validate(human_review_json(status="skipped"))
+    assert model.status is HumanReviewStatus.skipped
+    assert HumanReviewStatus.is_known("skipped")
+
+
 def test_human_review_accepts_restoring_formatting_status() -> None:
     model = HumanReviewResponse.model_validate(human_review_json(status="restoring_formatting"))
     assert model.status is HumanReviewStatus.restoring_formatting
