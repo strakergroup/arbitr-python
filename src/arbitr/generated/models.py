@@ -20,6 +20,7 @@ class FindingType(TolerantStrEnum):
     term_missing = "term_missing"
     repaired = "repaired"
     rewrite = "rewrite"
+    rule_violation = "rule_violation"
 
 
 class AgentFinding(BaseModel):
@@ -171,6 +172,7 @@ class HumanReviewStatus(TolerantStrEnum):
     failed = "failed"
     cancelled = "cancelled"
     awaiting_payment = "awaiting_payment"
+    skipped = "skipped"
     restoring_formatting = "restoring_formatting"
 
 
@@ -230,7 +232,11 @@ class Review(BaseModel):
     model_config = ConfigDict(
         extra="allow",
     )
-    status: str | None = Field(None, title="Status")
+    status: str | None = Field(
+        None,
+        description="Human-review state: `queued`, `in_review`, `completed`, `failed`, `cancelled`, `awaiting_payment` (trust credits short, so top up and call `POST /v1/projects/{id}/review/resumptions`), or `skipped` (the workflow has a human stage but nothing was billable, e.g. every file fully matched by translation memory, so no human review ran and nothing is owed). `null` when no human stage was requested.",
+        title="Status",
+    )
     service_plan: list[str] | None = Field([], title="Service Plan")
     requested_at: UtcDatetime | None = Field(None, title="Requested At")
     completed_at: UtcDatetime | None = Field(None, title="Completed At")
