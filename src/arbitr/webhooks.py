@@ -70,7 +70,8 @@ def verify_signature(
             )
 
     expected = compute_signature(body, ts, secret)
-    if not hmac.compare_digest(expected, signature):
+    # Bytes, not str: compare_digest raises TypeError on a non-ASCII str.
+    if not hmac.compare_digest(expected.encode(), signature.encode("utf-8", "surrogateescape")):
         raise WebhookVerificationError("signature mismatch")
 
 

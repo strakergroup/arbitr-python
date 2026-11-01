@@ -32,10 +32,22 @@ Regenerate with: uv run python scripts/generate_models.py
 ENUM_REF = (
     "openapi.json#/components/schemas/{schema}/{field}#-datamodel-code-generator-#-enum-#-special-#"
 )
+# A nullable enum (`anyOf: [enum, null]`) gets its ref one level deeper.
+NULLABLE_ENUM_REF = (
+    "openapi.json#/components/schemas/{schema}/{field}#-datamodel-code-generator-#-anyOf-#-special-#"
+    "/0#-datamodel-code-generator-#-enum-#-special-#"
+)
 MODEL_NAMES = {
     ENUM_REF.format(schema="FlagFinding", field="severity"): "FindingSeverity",
     ENUM_REF.format(schema="FlagFinding", field="status"): "FindingStatus",
     ENUM_REF.format(schema="HumanReviewResponse", field="status"): "HumanReviewStatus",
+    ENUM_REF.format(schema="ConnectionResponse", field="status"): "ConnectionStatus",
+    ENUM_REF.format(schema="TextTranslation", field="status"): "TextTranslationStatus",
+    NULLABLE_ENUM_REF.format(schema="RequesterResponse", field="matched_by"): "RequesterMatchedBy",
+    # Too generic to import as `Format`, `UsageType` and `Unit`.
+    ENUM_REF.format(schema="TextTranslateRequest", field="format"): "TextFormat",
+    ENUM_REF.format(schema="TextTranslateRequest", field="usage_type"): "TextUsageType",
+    NULLABLE_ENUM_REF.format(schema="UsageRecord", field="unit"): "UsageUnit",
     # Not a collision — `Mode` is just too generic for a name callers import.
     ENUM_REF.format(schema="MeResponse", field="mode"): "ApiKeyMode",
 }
@@ -132,6 +144,69 @@ def use_tolerant_enums(text: str) -> str:
     return text
 
 
+_KIND_UNION = re.compile(r"""Annotated\[(\w+(?: \| \w+)+), Field\(discriminator=['"]kind['"]\)\]""")
+
+UNKNOWN_FINDING = """\
+class UnknownFinding(BaseModel):
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    kind: str = Field(..., title="Kind")
+    id: str = Field(..., title="Id")
+
+
+def _finding_tag(value: object) -> str:
+    kind = value.get("kind") if isinstance(value, dict) else getattr(value, "kind", None)
+    return kind if kind in {known} else "unknown"
+
+
+"""
+
+
+def use_tolerant_findings(text: str) -> str:
+    """Parse a finding of a kind this build does not know as ``UnknownFinding``.
+
+    A closed discriminated union fails the whole findings page on one new
+    server-side kind. Known kinds still validate strictly against their model.
+    """
+    matches = list(_KIND_UNION.finditer(text))
+    if len(matches) != 1:
+        raise SystemExit(f'expected one Field(discriminator="kind") union, found {len(matches)}')
+    match = matches[0]
+    tagged = []
+    kinds = []
+    for name in match.group(1).split(" | "):
+        found = re.search(
+            rf"^class {name}\(BaseModel\):\n(?:    .*\n)*?"
+            r"""    kind: Literal\[['"]([^'"]+)['"]\]""",
+            text,
+            flags=re.MULTILINE,
+        )
+        if found is None:
+            raise SystemExit(f"expected a kind Literal on {name}")
+        kinds.append(found.group(1))
+        tagged.append(f'Annotated[{name}, Tag("{found.group(1)}")]')
+    tagged.append('Annotated[UnknownFinding, Tag("unknown")]')
+    union = f"Annotated[{' | '.join(tagged)}, Discriminator(_finding_tag)]"
+    owner = text.rfind("\nclass ", 0, match.start()) + 1
+    text = (
+        text[:owner]
+        + UNKNOWN_FINDING.format(known=tuple(kinds))
+        + text[owner : match.start()]
+        + union
+        + text[match.end() :]
+    )
+    text, inserted = re.subn(
+        r"from pydantic import ",
+        "from pydantic import Discriminator, Tag\nfrom pydantic import ",
+        text,
+        count=1,
+    )
+    if inserted != 1:
+        raise SystemExit("expected a pydantic import to hang the Discriminator import on")
+    return text
+
+
 def main() -> None:
     """Run datamodel-code-generator against the pinned spec."""
     OUT.parent.mkdir(parents=True, exist_ok=True)
@@ -151,6 +226,7 @@ def main() -> None:
         "3.11",
         "--use-standard-collections",
         "--use-union-operator",
+        "--set-default-enum-member",
         "--collapse-root-models",
         "--disable-timestamp",
         "--extra-fields",
@@ -165,7 +241,7 @@ def main() -> None:
     subprocess.run(cmd, check=True)
     text = OUT.read_text()
     check_model_names(text)
-    OUT.write_text(use_tolerant_enums(use_utc_datetime(text)))
+    OUT.write_text(use_tolerant_findings(use_tolerant_enums(use_utc_datetime(text))))
     subprocess.run(
         [sys.executable, "-m", "ruff", "format", str(OUT)],
         check=True,

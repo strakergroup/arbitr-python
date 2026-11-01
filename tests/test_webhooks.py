@@ -36,6 +36,12 @@ def test_tampered_body_fails() -> None:
         verify_signature(body=BODY + b" ", signature=sig, timestamp=ts, secret=SECRET)
 
 
+def test_non_ascii_signature_is_a_mismatch_not_a_type_error() -> None:
+    _, ts = sign()
+    with pytest.raises(WebhookVerificationError, match="mismatch"):
+        verify_signature(body=BODY, signature="sha256=\u00e9" * 8, timestamp=ts, secret=SECRET)
+
+
 def test_stale_timestamp_fails() -> None:
     old = int(time.time()) - 3600
     sig, ts = sign(ts=old)

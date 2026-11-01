@@ -10,6 +10,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType
 
+import httpcore2
 import httpx
 import pytest
 import respx
@@ -92,7 +93,7 @@ def script() -> ModuleType:
 
 @pytest.fixture
 def spec_api() -> Iterator[respx.MockRouter]:
-    with respx.mock(base_url="https://spec.test") as router:
+    with respx.mock(base_url="https://spec.test", using="httpcore2") as router:
         yield router
 
 
@@ -152,7 +153,7 @@ def test_unreachable_url_exits_2(
     script: ModuleType, spec_api: respx.MockRouter, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """A network flake must not be reported as drift."""
-    spec_api.get("/openapi.json").mock(side_effect=httpx.ConnectError("Connection refused"))
+    spec_api.get("/openapi.json").mock(side_effect=httpcore2.ConnectError("Connection refused"))
     assert script.main(["--url", _SPEC_URL]) == 2
     err = capsys.readouterr().err
     assert "failed to fetch" in err
@@ -208,7 +209,7 @@ def test_json_object_without_openapi_fields_exits_2(
 
 def test_fetch_targets_production_by_default(script: ModuleType) -> None:
     """No --url must mean the public prod host, since CI passes no arguments."""
-    with respx.mock(assert_all_called=True) as router:
+    with respx.mock(assert_all_called=True, using="httpcore2") as router:
         route = router.get(script.PROD_OPENAPI_URL).mock(
             return_value=httpx.Response(200, json=pinned_spec())
         )

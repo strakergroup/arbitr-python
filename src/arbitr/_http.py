@@ -7,10 +7,10 @@ import os
 import tempfile
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
-from typing import BinaryIO
-from urllib.parse import urlsplit, urlunsplit
+from typing import Any, BinaryIO
+from urllib.parse import quote, urlsplit, urlunsplit
 
-import httpx
+import httpx2
 
 from arbitr._constants import (
     DEFAULT_BASE_URL,
@@ -23,16 +23,32 @@ from arbitr._version import __version__
 from arbitr.errors import ClientInputError, from_response
 
 
-def default_headers(api_key: str, api_version: str) -> dict[str, str]:
-    """Auth, version, and User-Agent headers for every request."""
+def default_headers(
+    api_key: str, api_version: str, user_agent: str | None = None
+) -> dict[str, str]:
+    """Auth, version, and User-Agent headers for every request.
+
+    ``user_agent`` is appended to ``arbitr-python/<version>`` so the caller can be told apart.
+    """
+    agent = f"arbitr-python/{__version__}"
     return {
         "X-API-Key": api_key,
         "X-API-Version": api_version,
-        "User-Agent": f"arbitr-python/{__version__}",
+        "User-Agent": f"{agent} {user_agent}" if user_agent else agent,
     }
 
 
-def raise_for_status(resp: httpx.Response) -> None:
+def path_segment(value: str) -> str:
+    """Percent-encode one URL path segment so an id can never change the route.
+
+    ``quote`` leaves ``.`` alone and httpx2 resolves a bare ``.``/``..`` segment,
+    so those two are encoded by hand.
+    """
+    quoted = quote(value, safe="")
+    return quoted.replace(".", "%2E") if quoted in (".", "..") else quoted
+
+
+def raise_for_status(resp: httpx2.Response) -> None:
     """Raise a typed ArbitrError on any non-2xx response."""
     if not resp.is_success:
         raise from_response(resp)
@@ -60,7 +76,7 @@ def transport_retry_delay(attempt: int) -> float:
     return min(RETRY_BACKOFF_BASE_SECONDS * (2**attempt), RETRY_BACKOFF_MAX_SECONDS)
 
 
-def retry_wait_seconds(resp: httpx.Response, *, attempt: int, retries: int) -> float | None:
+def retry_wait_seconds(resp: httpx2.Response, *, attempt: int, retries: int) -> float | None:
     """Seconds to wait before another attempt, or ``None`` if this response is final.
 
     ``None`` means the caller should ``raise_for_status`` and either return the
@@ -71,7 +87,7 @@ def retry_wait_seconds(resp: httpx.Response, *, attempt: int, retries: int) -> f
     return retry_delay(resp, attempt)
 
 
-def retry_delay(resp: httpx.Response, attempt: int) -> float | None:
+def retry_delay(resp: httpx2.Response, attempt: int) -> float | None:
     """Seconds to wait before retrying ``resp``, or None if it must not be retried.
 
     Honours ``Retry-After`` on 429 (the API documents it in seconds) and falls
@@ -93,7 +109,7 @@ def retry_delay(resp: httpx.Response, attempt: int) -> float | None:
     return min(max(after, 0.0), RETRY_BACKOFF_MAX_SECONDS)
 
 
-def rate_limit_snapshot(resp: httpx.Response) -> dict[str, str]:
+def rate_limit_snapshot(resp: httpx2.Response) -> dict[str, str]:
     """The ``X-RateLimit-*`` headers present on ``resp``, keyed without the prefix."""
     prefix = "x-ratelimit-"
     return {
@@ -130,14 +146,31 @@ def write_download_file(dest: Path, chunks: Iterator[bytes]) -> None:
 
 
 async def awrite_download_file(dest: Path, chunks: AsyncIterator[bytes]) -> None:
-    """Async variant: buffer the stream, then write in one worker-thread call."""
-    parts: list[bytes] = []
+    """Async variant: each chunk goes to disk as it arrives, so memory stays flat."""
     try:
-        async for chunk in chunks:
-            parts.append(chunk)
+        tmp_path, handle = await asyncio.to_thread(_open_part_file, dest)
     except OSError as exc:
         raise ClientInputError(f"cannot write {dest}: {exc}") from exc
-    await asyncio.to_thread(write_download_file, dest, iter(parts))
+    try:
+        with handle:
+            async for chunk in chunks:
+                await asyncio.to_thread(_write_through, handle, chunk)
+        await asyncio.to_thread(tmp_path.replace, dest)
+    except OSError as exc:
+        _discard(tmp_path)
+        raise ClientInputError(f"cannot write {dest}: {exc}") from exc
+    except BaseException:
+        _discard(tmp_path)
+        raise
+
+
+def _write_through(handle: BinaryIO, chunk: bytes) -> None:
+    handle.write(chunk)
+    handle.flush()
+
+
+def _discard(path: Path) -> None:
+    path.unlink(missing_ok=True)
 
 
 _PROD_HOSTNAME = urlsplit(DEFAULT_BASE_URL).hostname
@@ -172,3 +205,8 @@ def project_ui_url(ui_base_url: str, project_id: str, *, view: str = "project") 
     """Deep link to a project in the Arbitr UI."""
     url = f"{ui_base_url.rstrip('/')}/projects/{project_id}"
     return f"{url}/agents" if view == "agents" else url
+
+
+def request_timeout(timeout: float | httpx2.Timeout | None) -> Any:
+    """One call's HTTP timeout; ``None`` keeps the client's (httpx2's ``USE_CLIENT_DEFAULT``)."""
+    return httpx2.USE_CLIENT_DEFAULT if timeout is None else timeout

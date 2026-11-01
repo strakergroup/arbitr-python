@@ -319,8 +319,9 @@ def submit(
             "--locales",
             help=(
                 "CSV of lowercase BCP-47 codes, e.g. ko-kr,fr-fr. "
-                "Bare codes (ko) are rejected — use --resolve-locales "
-                "or `arbitr languages --search` to find the full tag."
+                "Codes are sent as given and checked by the API against GET /v1/languages; "
+                "use --resolve-locales "
+                "or `arbitr languages --search` to pick the exact tag yourself."
             ),
         ),
     ],

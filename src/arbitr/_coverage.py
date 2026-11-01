@@ -30,6 +30,9 @@ OPERATION_METHODS: dict[str, str] = {
     "createReviewResumption": "projects.resume_human_review",
     "listLanguages": "languages.list",
     "getCreditBalance": "credits.balance",
+    "getConnection": "connection",
+    "translateText": "text.translate",
+    "listUsage": "usage.list",
 }
 
 _HTTP_METHODS = frozenset({"get", "put", "post", "delete", "patch", "head", "options", "trace"})

@@ -57,7 +57,12 @@ def load_host_settings(
     ui_base_url: str | None = None,
 ) -> HostSettings:
     """Resolve API and UI hosts without requiring an API key."""
-    file_vals = read_env_file(env_file)
+    return _host_settings(read_env_file(env_file), base_url=base_url, ui_base_url=ui_base_url)
+
+
+def _host_settings(
+    file_vals: dict[str, str], *, base_url: str | None, ui_base_url: str | None
+) -> HostSettings:
     url = (
         base_url
         or pick_env_value(
@@ -104,12 +109,16 @@ def load_client_settings(
         MissingApiKeyError: If no key is in the arguments, environment, or dotenv file.
     """
     file_vals = read_env_file(env_file)
-    host = load_host_settings(
-        env_file,
+    key_outside_file = api_key or pick_env_value("ARBITR_API_KEY", "arbitr_api_key", file_vals={})
+    key = key_outside_file or pick_env_value(
+        "ARBITR_API_KEY", "arbitr_api_key", file_vals=file_vals
+    )
+    # A key that did not come from the dotenv file is never sent to a host named only there.
+    host = _host_settings(
+        {} if key_outside_file else file_vals,
         base_url=base_url,
         ui_base_url=kwargs.pop("ui_base_url", None),
     )
-    key = api_key or pick_env_value("ARBITR_API_KEY", "arbitr_api_key", file_vals=file_vals)
     if "max_retries" not in kwargs:
         raw = pick_env_value("ARBITR_MAX_RETRIES", "arbitr_max_retries", file_vals=file_vals)
         if raw is not None:

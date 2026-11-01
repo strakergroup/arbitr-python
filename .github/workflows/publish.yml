@@ -8,28 +8,51 @@ permissions:
   contents: read
 
 jobs:
-  publish:
+  build:
     runs-on: ubuntu-latest
-    environment: pypi
-    permissions:
-      # Job-level permissions replace the workflow defaults. Checkout needs
-      # contents: read or a private repo looks like "not found".
-      contents: read
-      # Required for PyPI trusted publishing — no API token is stored.
-      id-token: write
     steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          python-version: "3.12"
-      - run: uv sync --frozen
+          fetch-depth: 0
+      - name: Tagged commit is on master
+        run: |
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/master; then
+            echo "release tag $GITHUB_REF_NAME is not on master" >&2
+            exit 1
+          fi
       - name: Tag matches the packaged version
         run: |
           tag="${GITHUB_REF_NAME#v}"
-          pkg="$(uv run python -c 'import arbitr; print(arbitr.__version__)')"
+          pkg="$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' src/arbitr/_version.py)"
           if [ "$tag" != "$pkg" ]; then
             echo "release tag $tag does not match arbitr.__version__ $pkg" >&2
             exit 1
           fi
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+        with:
+          python-version: "3.12"
       - run: uv build
-      - run: uv publish --trusted-publishing always
+      - name: The built wheel imports at the tagged version
+        run: |
+          python3 -m venv "$RUNNER_TEMP/smoke"
+          "$RUNNER_TEMP/smoke/bin/pip" install --quiet dist/*.whl
+          "$RUNNER_TEMP/smoke/bin/python" -c 'import arbitr, os; assert arbitr.__version__ == os.environ["GITHUB_REF_NAME"].removeprefix("v"), arbitr.__version__'
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      # Required for PyPI trusted publishing — no API token is stored. Nothing else: this job
+      # only uploads what the build job made.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086  # v1.14.3

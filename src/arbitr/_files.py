@@ -40,7 +40,7 @@ def require_submit_files(files: list[FileInput]) -> None:
 def open_upload_parts(
     files: list[FileInput], extension_check: ExtensionCheck
 ) -> Iterator[list[tuple[str, tuple[str, Any, str]]]]:
-    """Yield httpx multipart ``file`` parts; close any paths this helper opened."""
+    """Yield httpx2 multipart ``file`` parts; close any paths this helper opened."""
     opened: list[BinaryIO] = []
     try:
         yield [("file", coerce_upload_file(item, opened, extension_check)) for item in files]
@@ -50,7 +50,7 @@ def open_upload_parts(
 
 
 def require_binary_upload_handle(file_input: object) -> None:
-    """Raise if ``file_input`` is a text-mode handle httpx would reject."""
+    """Raise if ``file_input`` is a text-mode handle httpx2 would reject."""
     mode = getattr(file_input, "mode", None)
     if isinstance(mode, str) and "b" not in mode:
         raise ClientInputError("file handles must be opened in binary mode")
@@ -115,7 +115,7 @@ def ensure_upload_within_limit(file_inputs: list[FileInput]) -> None:
 
 
 def _read_part_content(content: Any) -> bytes:
-    """Bytes of an httpx file part; restores the handle position when possible."""
+    """Bytes of an httpx2 file part; restores the handle position when possible."""
     if isinstance(content, bytes):
         return content
     if hasattr(content, "tell") and hasattr(content, "seek"):
@@ -147,7 +147,7 @@ def load_upload_parts(
 def coerce_upload_file(
     file_input: FileInput, opened: list[BinaryIO], extension_check: ExtensionCheck
 ) -> tuple[str, Any, str]:
-    """Normalise a FileInput to httpx's (filename, content, content_type)."""
+    """Normalise a FileInput to httpx2's (filename, content, content_type)."""
     extension_check = parse_extension_check(extension_check)
     if isinstance(file_input, (str, Path)):
         path = Path(file_input)

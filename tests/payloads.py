@@ -160,3 +160,56 @@ def human_review_json(**over: Any) -> dict[str, Any]:
     }
     body.update(over)
     return body
+
+
+def text_translate_json(ref: str = "r1", *, status: str = "translated") -> dict[str, Any]:
+    """A TextTranslateResponse-shaped dict with one text and one target."""
+    return {
+        "results": [
+            {
+                "ref": ref,
+                "detected_language_code": "en-us",
+                "translations": [
+                    {
+                        "target_language_code": "fr-fr",
+                        "status": status,
+                        "text": "Bonjour",
+                        "intelligence_credits": 1,
+                    }
+                ],
+            }
+        ]
+    }
+
+
+def connection_json(**over: Any) -> dict[str, Any]:
+    """A ConnectionResponse-shaped dict."""
+    body: dict[str, Any] = {
+        "id": "conn-1",
+        "provider": "slack",
+        "tenant_id": "slack:E0789",
+        "tenant_kind": "enterprise",
+        "tenant_name": "Example",
+        "scopes": ["verify:read"],
+        "status": "active",
+    }
+    body.update(over)
+    return body
+
+
+def usage_list_json(*, number: int = 1, has_more: bool = False) -> dict[str, Any]:
+    """A UsageListResponse-shaped dict with one text-translation charge."""
+    return {
+        "usage": [
+            {
+                "id": "tx-1",
+                "created_at": "2026-10-01T00:00:00Z",
+                "project_id": None,
+                "usage_type": "channel",
+                "target_language_codes": ["fr-fr"],
+                "unit": "character",
+                "quantity": 120,
+            }
+        ],
+        "page": {"number": number, "has_more": has_more, "limit": 50},
+    }

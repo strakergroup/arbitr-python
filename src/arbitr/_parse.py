@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any, TypeVar
 
-import httpx
+import httpx2
 from pydantic import BaseModel
 from pydantic import ValidationError as PydanticValidationError
 
@@ -14,7 +14,7 @@ from arbitr.errors import ResponseDecodeError, ResponseParseError
 T = TypeVar("T", bound=BaseModel)
 
 
-def decode_json_body(resp: httpx.Response, *, operation: str) -> Any:
+def decode_json_body(resp: httpx2.Response, *, operation: str) -> Any:
     """Parse a 2xx response body as JSON.
 
     An empty body becomes ``None``. Malformed JSON is a typed client error,

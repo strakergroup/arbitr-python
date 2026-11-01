@@ -1,4 +1,4 @@
-"""SDK unit tests — HTTP is mocked with httpx.MockTransport (no network)."""
+"""SDK unit tests — HTTP is mocked with httpx2.MockTransport (no network)."""
 
 from __future__ import annotations
 
@@ -10,8 +10,10 @@ from io import BytesIO
 from typing import Any
 
 import httpx
+import httpx2
 import pytest
 
+import arbitr
 from arbitr import (
     DEFAULT_UI_URL,
     SUPPORTED_FORMATS,
@@ -23,8 +25,8 @@ from arbitr import (
     ArbitrClientError,
     ArbitrError,
     AuthenticationError,
-    BareLocaleCodeError,
     ClientInputError,
+    ConnectionStatus,
     DisallowedFileExtensionError,
     FindingSeverity,
     FindingsKeysetError,
@@ -33,19 +35,27 @@ from arbitr import (
     NotFoundError,
     ProjectWaitTimeoutError,
     RateLimitError,
+    Requester,
+    RequesterSource,
     ResponseDecodeError,
     ResponseParseError,
+    TextToTranslate,
+    TextTranslationStatus,
     UnknownLocaleCodesError,
+    UsageUnit,
     ValidationError,
 )
 from payloads import (
     agent_finding_json,
     chain_of_custody_json,
+    connection_json,
     finding_list_json,
     flag_finding_json,
     human_review_json,
     project_json,
     project_list_json,
+    text_translate_json,
+    usage_list_json,
 )
 
 
@@ -53,16 +63,16 @@ def make_client(handler: Any) -> ArbitrClient:
     return ArbitrClient(
         api_key="py_test_abc123",
         base_url="https://api.test",
-        transport=httpx.MockTransport(handler),
+        transport=httpx2.MockTransport(handler),
     )
 
 
 def test_auth_headers_sent() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.headers["X-API-Key"] == "py_test_abc123"
         assert request.headers["X-API-Version"] == "1"
         assert request.headers["User-Agent"].startswith("arbitr-python/")
-        return httpx.Response(200, json={"balance": 100, "currency": "credits"})
+        return httpx2.Response(200, json={"balance": 100, "currency": "credits"})
 
     client = make_client(handler)
     assert client.credits.balance().balance == 100
@@ -74,11 +84,11 @@ def test_projects_iterate_follows_page_numbers() -> None:
         "2": project_list_json([project_json("p2")], number=2, has_more=False, limit=1),
     }
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         page = request.url.params.get("page")
         assert request.url.params.get("limit") == "1"
         assert page in pages
-        return httpx.Response(200, json=pages[page])
+        return httpx2.Response(200, json=pages[page])
 
     client = make_client(handler)
     ids = [p.id for p in client.projects.iterate(limit=1)]
@@ -88,9 +98,9 @@ def test_projects_iterate_follows_page_numbers() -> None:
 def test_iterate_projects_resumes_from_page() -> None:
     """``page`` starts the walk, mirroring ``iterate_findings(after=...)``."""
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.params.get("page") == "2"
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json=project_list_json([project_json("p2")], number=2, has_more=False, limit=1),
         )
@@ -101,11 +111,11 @@ def test_iterate_projects_resumes_from_page() -> None:
 
 
 def test_projects_list_params() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.params.get("modified_after") == "2026-07-26T00:00:00Z"
         assert request.url.params.get("status") == "completed"
         assert request.url.params.get("page") == "2"
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json=project_list_json([], number=2, has_more=False, limit=50),
         )
@@ -114,17 +124,142 @@ def test_projects_list_params() -> None:
     client.projects.list(page=2, modified_after="2026-07-26T00:00:00Z", status="completed")
 
 
+def test_projects_list_requester_and_search_params() -> None:
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        assert request.url.params.get("requester_tenant_id") == "E0789"
+        assert request.url.params.get("requester_external_id") == "U0123"
+        assert request.url.params.get("q") == "contract"
+        return httpx2.Response(200, json=project_list_json([project_json("p1")]))
+
+    client = make_client(handler)
+    ids = [
+        p.id
+        for p in client.projects.iterate(
+            requester_tenant_id="E0789", requester_external_id="U0123", q="contract"
+        )
+    ]
+    assert ids == ["p1"]
+
+
+@pytest.mark.parametrize(("tenant_id", "external_id"), [("E0789", None), (None, "U0123")])
+def test_projects_list_rejects_half_a_requester(
+    tenant_id: str | None, external_id: str | None
+) -> None:
+    client = make_client(lambda r: pytest.fail("no request expected"))
+    with pytest.raises(ClientInputError, match="together"):
+        client.projects.list(requester_tenant_id=tenant_id, requester_external_id=external_id)
+
+
+def test_text_translate_posts_texts_and_parses_statuses() -> None:
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        assert request.method == "POST"
+        assert request.url.path == "/v1/text/translate"
+        captured["body"] = json.loads(request.content)
+        return httpx2.Response(200, json=text_translate_json("r1"))
+
+    client = make_client(handler)
+    result = client.text.translate(
+        [TextToTranslate(ref="r1", text="Hello", target_language_codes=["fr-fr"])],
+        format="slack",
+        usage_type="channel",
+        requester=Requester(
+            tenant_id="E0789", external_id="U0123", source=RequesterSource(app="slack")
+        ),
+    )
+    assert captured["body"] == {
+        "texts": [{"ref": "r1", "text": "Hello", "target_language_codes": ["fr-fr"]}],
+        "format": "slack",
+        "usage_type": "channel",
+        "requester": {"tenant_id": "E0789", "external_id": "U0123", "source": {"app": "slack"}},
+    }
+    translation = result.results[0].translations[0]
+    assert translation.status is TextTranslationStatus.translated
+    assert translation.text == "Bonjour"
+
+
+def test_text_translate_sends_only_the_texts_by_default() -> None:
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx2.Response(200, json=text_translate_json("r1", status="same_language"))
+
+    client = make_client(handler)
+    client.text.translate(
+        [
+            TextToTranslate(
+                ref="r1",
+                text="Bonjour",
+                source_language_code="fr-fr",
+                target_language_codes=["fr-ca"],
+            )
+        ]
+    )
+    assert captured["body"] == {
+        "texts": [
+            {
+                "ref": "r1",
+                "text": "Bonjour",
+                "source_language_code": "fr-fr",
+                "target_language_codes": ["fr-ca"],
+            }
+        ]
+    }
+
+
+def test_text_translate_sends_a_catalogue_tag_without_a_region() -> None:
+    """``ar`` is a catalogue tag in its own right, unlike a bare ``fr``."""
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx2.Response(200, json=text_translate_json("r1"))
+
+    client = make_client(handler)
+    client.text.translate([TextToTranslate(ref="r1", text="Hello", target_language_codes=["ar"])])
+    assert captured["body"]["texts"][0]["target_language_codes"] == ["ar"]
+
+
+def test_connection() -> None:
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        assert request.url.path == "/v1/connection"
+        return httpx2.Response(200, json=connection_json())
+
+    client = make_client(handler)
+    connection = client.connection()
+    assert connection.tenant_id == "slack:E0789"
+    assert connection.status is ConnectionStatus.active
+
+
+def test_usage_list_params() -> None:
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        assert request.url.path == "/v1/usage"
+        assert request.url.params.get("from") == "2026-10-01T00:00:00Z"
+        assert request.url.params.get("to") == "2026-11-01T00:00:00Z"
+        assert request.url.params.get("page") == "2"
+        assert request.url.params.get("limit") == "10"
+        return httpx2.Response(200, json=usage_list_json(number=2))
+
+    client = make_client(handler)
+    usage = client.usage.list(
+        from_="2026-10-01T00:00:00Z", to="2026-11-01T00:00:00Z", page=2, limit=10
+    )
+    assert usage.usage[0].unit is UsageUnit.character
+
+
 def test_submit_builds_multipart(tmp_path: Any) -> None:
     doc = tmp_path / "hello.txt"
     doc.write_text("hello world")
     captured: dict[str, Any] = {}
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.path == "/v1/projects"
         captured["content_type"] = request.headers["content-type"]
         captured["idem"] = request.headers.get("Idempotency-Key")
         captured["body"] = request.content
-        return httpx.Response(201, json=project_json("proj-1", status="extracting"))
+        return httpx2.Response(201, json=project_json("proj-1", status="extracting"))
 
     client = make_client(handler)
     project = client.projects.submit(
@@ -152,7 +287,7 @@ def test_submit_builds_multipart(tmp_path: Any) -> None:
 def test_submit_rejects_disallowed_extension(tmp_path: Any) -> None:
     exe = tmp_path / "evil.exe"
     exe.write_bytes(b"MZ")
-    client = make_client(lambda r: httpx.Response(500))
+    client = make_client(lambda r: httpx2.Response(500))
     with pytest.raises(DisallowedFileExtensionError, match="allowlist") as de:
         client.projects.submit(files=[exe], name="x", target_language_codes=["ko-kr"])
     assert de.value.filename == "evil.exe"
@@ -162,7 +297,7 @@ def test_submit_rejects_disallowed_extension(tmp_path: Any) -> None:
 
 
 def test_submit_rejects_disallowed_extension_on_bytes_tuple() -> None:
-    client = make_client(lambda r: httpx.Response(500))
+    client = make_client(lambda r: httpx2.Response(500))
     with pytest.raises(DisallowedFileExtensionError) as de:
         client.projects.submit(
             files=[("evil.exe", b"MZ")], name="x", target_language_codes=["ko-kr"]
@@ -173,7 +308,7 @@ def test_submit_rejects_disallowed_extension_on_bytes_tuple() -> None:
 def test_submit_extension_check_off_allows_anything(tmp_path: Any) -> None:
     exe = tmp_path / "tool.exe"
     exe.write_bytes(b"MZ")
-    client = make_client(lambda r: httpx.Response(201, json=project_json("p")))
+    client = make_client(lambda r: httpx2.Response(201, json=project_json("p")))
     project = client.projects.submit(
         files=[exe], name="x", target_language_codes=["ko-kr"], extension_check="off"
     )
@@ -181,7 +316,7 @@ def test_submit_extension_check_off_allows_anything(tmp_path: Any) -> None:
 
 
 def test_submit_rejects_empty_file_list() -> None:
-    client = make_client(lambda r: httpx.Response(500))
+    client = make_client(lambda r: httpx2.Response(500))
     with pytest.raises(ClientInputError, match="at least one file"):
         client.projects.submit(files=[], name="x", target_language_codes=["ko-kr"])
 
@@ -189,14 +324,14 @@ def test_submit_rejects_empty_file_list() -> None:
 def test_submit_rejects_disallowed_extension_on_file_object(tmp_path: Any) -> None:
     exe = tmp_path / "evil.exe"
     exe.write_bytes(b"MZ")
-    client = make_client(lambda r: httpx.Response(500))
+    client = make_client(lambda r: httpx2.Response(500))
     with exe.open("rb") as handle, pytest.raises(DisallowedFileExtensionError) as de:
         client.projects.submit(files=[handle], name="x", target_language_codes=["ko-kr"])
     assert de.value.extension == ".exe"
 
 
 def test_submit_rejects_invalid_extension_check() -> None:
-    client = make_client(lambda r: httpx.Response(500))
+    client = make_client(lambda r: httpx2.Response(500))
     bogus_check: Any = "skip"
     with pytest.raises(ClientInputError, match="extension_check"):
         client.projects.submit(
@@ -209,7 +344,7 @@ def test_submit_rejects_invalid_extension_check() -> None:
 
 def test_submit_rejects_over_total_byte_limit(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("arbitr._constants.MAX_UPLOAD_TOTAL_BYTES", 4)
-    client = make_client(lambda r: httpx.Response(500))
+    client = make_client(lambda r: httpx2.Response(500))
     with pytest.raises(ClientInputError, match="upload too large"):
         client.projects.submit(
             files=[("a.txt", b"hello")],
@@ -219,14 +354,14 @@ def test_submit_rejects_over_total_byte_limit(monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_submit_rejects_unsupported_file_input() -> None:
-    client = make_client(lambda r: httpx.Response(500))
+    client = make_client(lambda r: httpx2.Response(500))
     bad_files: list[Any] = [123]
     with pytest.raises(ClientInputError, match="unsupported file input"):
         client.projects.submit(files=bad_files, name="x", target_language_codes=["ko-kr"])
 
 
 def test_submit_rejects_malformed_file_tuple() -> None:
-    client = make_client(lambda r: httpx.Response(500))
+    client = make_client(lambda r: httpx2.Response(500))
     malformed: list[Any] = [("a.txt",)]
     with pytest.raises(ClientInputError, match="file tuples"):
         client.projects.submit(files=malformed, name="x", target_language_codes=["ko-kr"])
@@ -234,7 +369,7 @@ def test_submit_rejects_malformed_file_tuple() -> None:
 
 def test_submit_missing_path_is_a_client_error() -> None:
     """A missing file must not leak FileNotFoundError past ArbitrBaseError."""
-    client = make_client(lambda r: httpx.Response(500))
+    client = make_client(lambda r: httpx2.Response(500))
     with pytest.raises(ClientInputError, match="cannot read upload") as raised:
         client.projects.submit(
             files=["/no/such/arbitr-upload.txt"],
@@ -249,13 +384,13 @@ def test_submit_text_mode_handle_is_a_client_error(tmp_path: Any) -> None:
     """httpx TypeError on text-mode handles must not reach the caller."""
     path = tmp_path / "note.txt"
     path.write_text("hello")
-    client = make_client(lambda r: httpx.Response(500))
+    client = make_client(lambda r: httpx2.Response(500))
     with path.open("r") as handle, pytest.raises(ClientInputError, match="binary mode"):
         client.projects.submit(files=[handle], name="x", target_language_codes=["ko-kr"])
 
 
 def test_submit_unnamed_temporary_file() -> None:
-    client = make_client(lambda r: httpx.Response(201, json=project_json("p")))
+    client = make_client(lambda r: httpx2.Response(201, json=project_json("p")))
     with tempfile.TemporaryFile() as handle:
         handle.write(b"hello")
         handle.seek(0)
@@ -269,11 +404,11 @@ def test_submit_unnamed_temporary_file() -> None:
 
 
 def test_submit_workflow_and_due_date() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         body = request.content
         assert json.dumps(["AI_TRANSLATION", "TRANSLATION"]).encode() in body
         assert b'name="due_date"' in body and b"2026-08-01" in body
-        return httpx.Response(201, json=project_json("p-3"))
+        return httpx2.Response(201, json=project_json("p-3"))
 
     client = make_client(handler)
     client.projects.submit(
@@ -288,8 +423,8 @@ def test_submit_workflow_and_due_date() -> None:
 def test_wait_polls_until_terminal() -> None:
     statuses = iter(["extracting", "translating", "completed"])
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=project_json("p", status=next(statuses)))
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=project_json("p", status=next(statuses)))
 
     client = make_client(handler)
     final = client.projects.wait("p", timeout=10, poll_interval=0.01)
@@ -297,8 +432,8 @@ def test_wait_polls_until_terminal() -> None:
 
 
 def test_wait_raises_on_agent_selection_gate() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=project_json("p", status="agent_selection"))
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=project_json("p", status="agent_selection"))
 
     client = make_client(handler)
     with pytest.raises(ActionRequiredError) as ar:
@@ -312,8 +447,8 @@ def test_wait_raises_on_agent_selection_gate() -> None:
 def test_wait_ignores_transient_agent_selection() -> None:
     statuses = iter(["agent_selection", "translating", "completed"])
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=project_json("p", status=next(statuses)))
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=project_json("p", status=next(statuses)))
 
     client = make_client(handler)
     final = client.projects.wait("p", timeout=10, poll_interval=0.01)
@@ -323,8 +458,8 @@ def test_wait_ignores_transient_agent_selection() -> None:
 def test_wait_through_gate_keeps_polling() -> None:
     statuses = iter(["agent_selection", "agent_selection", "translating", "completed"])
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=project_json("p", status=next(statuses)))
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=project_json("p", status=next(statuses)))
 
     client = make_client(handler)
     final = client.projects.wait("p", timeout=10, poll_interval=0.01, on_action_required="wait")
@@ -332,8 +467,8 @@ def test_wait_through_gate_keeps_polling() -> None:
 
 
 def test_wait_awaiting_payment_mentions_credits() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=project_json("p", status="awaiting_payment"))
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=project_json("p", status="awaiting_payment"))
 
     client = make_client(handler)
     with pytest.raises(ActionRequiredError, match="arbitr resume") as ar:
@@ -342,7 +477,7 @@ def test_wait_awaiting_payment_mentions_credits() -> None:
 
 
 def test_wait_rejects_bad_mode() -> None:
-    client = make_client(lambda r: httpx.Response(200, json={}))
+    client = make_client(lambda r: httpx2.Response(200, json={}))
     bogus_mode: Any = "bogus"
     with pytest.raises(ClientInputError, match="on_action_required"):
         client.projects.wait("p", on_action_required=bogus_mode)
@@ -352,9 +487,9 @@ def test_wait_treats_cancelled_as_terminal() -> None:
     """Regression: `cancelled` was not terminal, so wait() polled to the timeout."""
     calls = {"n": 0}
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         calls["n"] += 1
-        return httpx.Response(200, json=project_json("p", status="cancelled"))
+        return httpx2.Response(200, json=project_json("p", status="cancelled"))
 
     client = make_client(handler)
     final = client.projects.wait("p", timeout=10, poll_interval=0.01)
@@ -366,9 +501,9 @@ def test_submit_lowercases_locale_codes() -> None:
     """The API accepts lowercase BCP-47 tags only; mixed case must be folded."""
     captured: dict[str, Any] = {}
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         captured["body"] = request.content
-        return httpx.Response(201, json=project_json("p"))
+        return httpx2.Response(201, json=project_json("p"))
 
     client = make_client(handler)
     client.projects.submit(
@@ -382,20 +517,22 @@ def test_submit_lowercases_locale_codes() -> None:
     assert b"EN-US" not in captured["body"]
 
 
-def test_submit_rejects_bare_locale_codes() -> None:
-    client = make_client(lambda _request: httpx.Response(500))
-    with pytest.raises(BareLocaleCodeError) as raised:
-        client.projects.submit(
-            files=[("a.txt", b"hi")],
-            name="x",
-            target_language_codes=["ko"],
-        )
-    assert raised.value.code == "ko"
+def test_submit_sends_a_catalogue_tag_without_a_region() -> None:
+    """``ar`` is a catalogue tag in its own right; the API judges a bare ``ko``."""
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        captured["body"] = request.content
+        return httpx2.Response(201, json=project_json("p"))
+
+    client = make_client(handler)
+    client.projects.submit(files=[("a.txt", b"hi")], name="x", target_language_codes=["AR"])
+    assert json.dumps(["ar"]).encode() in captured["body"]
 
 
 def test_wait_times_out() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=project_json("p", status="translating"))
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=project_json("p", status="translating"))
 
     client = make_client(handler)
     with pytest.raises(ProjectWaitTimeoutError) as te:
@@ -409,10 +546,10 @@ def test_download_zip(tmp_path: Any) -> None:
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr("out_ko.xliff", "<xliff/>")
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.path == "/v1/projects/p/deliverables"
         assert request.url.params.get("format") == "zip"
-        return httpx.Response(
+        return httpx2.Response(
             200, content=buf.getvalue(), headers={"content-type": "application/zip"}
         )
 
@@ -427,8 +564,8 @@ def test_failed_download_leaves_existing_dest(tmp_path: Any) -> None:
     dest = tmp_path / "out.bin"
     dest.write_bytes(b"keep-me")
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
             404,
             json={"error": {"code": "not_found", "message": "nope"}},
         )
@@ -440,8 +577,8 @@ def test_failed_download_leaves_existing_dest(tmp_path: Any) -> None:
 
 
 def test_redirect_is_not_success() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(302, headers={"location": "/elsewhere"})
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(302, headers={"location": "/elsewhere"})
 
     client = make_client(handler)
     with pytest.raises(ArbitrError) as exc:
@@ -453,9 +590,9 @@ def test_redirects_are_never_followed() -> None:
     """Following a redirect would forward X-API-Key to whatever host it names."""
     seen: list[str] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         seen.append(str(request.url))
-        return httpx.Response(301, headers={"location": "https://evil.example/v1/me"})
+        return httpx2.Response(301, headers={"location": "https://evil.example/v1/me"})
 
     client = make_client(handler)
     with pytest.raises(ApiMovedError) as raised:
@@ -468,11 +605,11 @@ def test_streamed_download_from_a_moved_host_names_the_new_one(tmp_path: Any) ->
     """Downloads stream the body, so the error path must read it before parsing."""
     dest = tmp_path / "out.zip"
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
             301,
             headers={"location": "https://api.arbitr.ai/v1/projects/p/deliverables/d-1"},
-            stream=httpx.ByteStream(b"<html>moved</html>"),
+            stream=httpx2.ByteStream(b"<html>moved</html>"),
         )
 
     client = make_client(handler)
@@ -485,10 +622,10 @@ def test_streamed_download_from_a_moved_host_names_the_new_one(tmp_path: Any) ->
 def test_streamed_download_error_body_is_read_before_parsing(tmp_path: Any) -> None:
     dest = tmp_path / "out.zip"
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
             404,
-            stream=httpx.ByteStream(b'{"error": {"code": "not_found", "message": "gone"}}'),
+            stream=httpx2.ByteStream(b'{"error": {"code": "not_found", "message": "gone"}}'),
             headers={"content-type": "application/json"},
         )
 
@@ -498,14 +635,14 @@ def test_streamed_download_error_body_is_read_before_parsing(tmp_path: Any) -> N
 
 
 def test_error_envelope_maps_to_typed_errors() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         if request.url.path == "/missing":
-            return httpx.Response(
+            return httpx2.Response(
                 404,
                 json={"error": {"code": "not_found", "message": "nope", "request_id": "r-1"}},
             )
         if request.url.path == "/bad":
-            return httpx.Response(
+            return httpx2.Response(
                 422,
                 json={
                     "error": {
@@ -516,7 +653,7 @@ def test_error_envelope_maps_to_typed_errors() -> None:
                     }
                 },
             )
-        return httpx.Response(
+        return httpx2.Response(
             429,
             json={"error": {"code": "rate_limited", "message": "slow down", "request_id": "r-3"}},
             headers={"Retry-After": "7"},
@@ -547,7 +684,7 @@ def test_languages_resolve_normalizes_and_rejects() -> None:
         ],
         "page": {"number": 1, "has_more": False, "limit": 4},
     }
-    client = make_client(lambda r: httpx.Response(200, json=langs))
+    client = make_client(lambda r: httpx2.Response(200, json=langs))
 
     assert client.languages.resolve(["JA-JP", "Fr-Fr"]) == ["ja-jp", "fr-fr"]
     assert client.languages.resolve(["ja"]) == ["ja-jp"]
@@ -569,9 +706,9 @@ def test_key_mode_prefixes() -> None:
 
 
 def test_me_and_v1_prefix() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.path == "/v1/me"
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json={"org_id": "org-1", "mode": "live", "scopes": ["verify:read"]},
         )
@@ -581,10 +718,10 @@ def test_me_and_v1_prefix() -> None:
 
 
 def test_download_single_deliverable(tmp_path: Any) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.path == "/v1/projects/p/deliverables/d-1"
         assert request.headers["accept"] == "application/octet-stream"
-        return httpx.Response(200, content=b"<xliff/>")
+        return httpx2.Response(200, content=b"<xliff/>")
 
     client = make_client(handler)
     dest = tmp_path / "one.xliff"
@@ -593,14 +730,14 @@ def test_download_single_deliverable(tmp_path: Any) -> None:
 
 
 def test_findings_page_and_filters() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.path == "/v1/projects/p/findings"
         assert request.url.params.get("limit") == "10"
         assert request.url.params.get("severity") == "critical"
         assert request.url.params.get("status") == "open"
         assert request.url.params.get("category") == "terminology"
         assert "page" not in request.url.params
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json=finding_list_json([flag_finding_json()], has_more=False, limit=10),
         )
@@ -626,12 +763,12 @@ def test_iterate_findings_walks_after() -> None:
         "0:0:flag-1": finding_list_json([agent_finding_json("find-2")], has_more=False, limit=1),
     }
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.path == "/v1/projects/p/findings"
         assert "page" not in request.url.params
         token = request.url.params.get("after")
         assert token in pages
-        return httpx.Response(200, json=pages[token])
+        return httpx2.Response(200, json=pages[token])
 
     client = make_client(handler)
     kinds = [item.kind for item in client.projects.iterate_findings("p", limit=1)]
@@ -641,10 +778,10 @@ def test_iterate_findings_walks_after() -> None:
 def test_findings_filters_accept_plain_strings() -> None:
     """The enums are a hint, not a gate — a new server-side value still works."""
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.params.get("severity") == "critical"
         assert request.url.params.get("status") == "open"
-        return httpx.Response(200, json=finding_list_json([flag_finding_json()]))
+        return httpx2.Response(200, json=finding_list_json([flag_finding_json()]))
 
     client = make_client(handler)
     body = client.projects.findings("p", severity="critical", status="open")
@@ -658,10 +795,10 @@ def test_iterate_findings_continues_on_empty_page() -> None:
         "skip-1": finding_list_json([flag_finding_json("flag-1")], has_more=False, limit=1),
     }
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         token = request.url.params.get("after")
         assert token in pages
-        return httpx.Response(200, json=pages[token])
+        return httpx2.Response(200, json=pages[token])
 
     client = make_client(handler)
     ids = [item.id for item in client.projects.iterate_findings("p", limit=1)]
@@ -669,9 +806,9 @@ def test_iterate_findings_continues_on_empty_page() -> None:
 
 
 def test_iterate_findings_resumes_from_after() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.params.get("after") == "0:0:flag-1"
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json=finding_list_json([agent_finding_json("find-2")], has_more=False, limit=1),
         )
@@ -684,8 +821,8 @@ def test_iterate_findings_resumes_from_after() -> None:
 
 
 def test_iterate_findings_raises_when_after_does_not_advance() -> None:
-    def handler(_request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
+    def handler(_request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
             200,
             json=finding_list_json(
                 [flag_finding_json("flag-1")], has_more=True, limit=1, after="same"
@@ -702,7 +839,7 @@ def test_iterate_findings_raises_when_after_does_not_advance() -> None:
 
 def test_iterate_findings_raises_when_has_more_without_after() -> None:
     client = make_client(
-        lambda _r: httpx.Response(
+        lambda _r: httpx2.Response(
             200,
             json=finding_list_json([flag_finding_json("flag-1")], has_more=True, limit=1),
         )
@@ -717,9 +854,9 @@ def test_iterate_findings_raises_when_has_more_without_after() -> None:
 
 
 def test_chain_of_custody() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.path == "/v1/projects/p/chain-of-custody"
-        return httpx.Response(200, json=chain_of_custody_json("p", created_via="ui"))
+        return httpx2.Response(200, json=chain_of_custody_json("p", created_via="ui"))
 
     client = make_client(handler)
     body = client.projects.chain_of_custody("p")
@@ -738,7 +875,7 @@ def test_chain_of_custody_reads_naive_timestamps_as_utc() -> None:
     payload["created_at"] = "2026-08-20T00:05:55.093379"
     payload["deliverables"][0]["created_at"] = "2026-08-20T00:06:53.096363"
 
-    client = make_client(lambda _r: httpx.Response(200, json=payload))
+    client = make_client(lambda _r: httpx2.Response(200, json=payload))
     body = client.projects.chain_of_custody("p")
     assert body.created_at == datetime(2026, 8, 20, 0, 5, 55, 93379, tzinfo=UTC)
     assert body.deliverables[0].created_at.tzinfo is UTC
@@ -748,20 +885,20 @@ def test_offset_timestamps_are_normalized_to_utc() -> None:
     payload = chain_of_custody_json("p")
     payload["created_at"] = "2026-08-20T12:05:55+12:00"
 
-    client = make_client(lambda _r: httpx.Response(200, json=payload))
+    client = make_client(lambda _r: httpx2.Response(200, json=payload))
     body = client.projects.chain_of_custody("p")
     assert body.created_at == datetime(2026, 8, 20, 0, 5, 55, tzinfo=UTC)
     assert body.created_at.tzinfo is UTC
 
 
 def test_get_rejects_body_that_misses_required_fields() -> None:
-    client = make_client(lambda r: httpx.Response(200, json={"id": "p"}))
+    client = make_client(lambda r: httpx2.Response(200, json={"id": "p"}))
     with pytest.raises(ResponseParseError, match="getProject"):
         client.projects.get("p")
 
 
 def test_malformed_2xx_json_is_a_typed_error() -> None:
-    client = make_client(lambda _request: httpx.Response(200, content=b"<html>nope</html>"))
+    client = make_client(lambda _request: httpx2.Response(200, content=b"<html>nope</html>"))
     with pytest.raises(ResponseDecodeError, match="/v1/me") as raised:
         client.me()
     assert raised.value.operation == "/v1/me"
@@ -771,11 +908,11 @@ def test_malformed_2xx_json_is_a_typed_error() -> None:
 def test_resume_paths() -> None:
     seen: list[str] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         seen.append(request.url.path)
         if request.url.path.endswith("/review/resumptions"):
-            return httpx.Response(200, json=human_review_json())
-        return httpx.Response(200, json={"project_id": "p", "status": "completed"})
+            return httpx2.Response(200, json=human_review_json())
+        return httpx2.Response(200, json={"project_id": "p", "status": "completed"})
 
     client = make_client(handler)
     resumed = client.projects.resume("p")
@@ -789,9 +926,46 @@ def test_resume_paths() -> None:
     assert review.status == "queued"
 
 
+def test_path_ids_are_percent_encoded(tmp_path: Any) -> None:
+    seen: list[bytes] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        seen.append(request.url.raw_path)
+        return httpx2.Response(
+            404, json={"error": {"code": "not_found", "message": "nope", "request_id": "r"}}
+        )
+
+    client = make_client(handler)
+    calls = [
+        lambda: client.projects.get("../credits/balance"),
+        lambda: client.projects.get(".."),
+        lambda: client.projects.deliverables("a/b"),
+        lambda: client.projects.deliverable("p", "d?x=1"),
+        lambda: client.projects.download_deliverable("p", "../d", tmp_path / "out"),
+        lambda: client.projects.resume("."),
+    ]
+    for call in calls:
+        with pytest.raises(NotFoundError):
+            call()
+    assert seen == [
+        b"/v1/projects/..%2Fcredits%2Fbalance",
+        b"/v1/projects/%2E%2E",
+        b"/v1/projects/a%2Fb/deliverables",
+        b"/v1/projects/p/deliverables/d%3Fx%3D1",
+        b"/v1/projects/p/deliverables/..%2Fd",
+        b"/v1/projects/%2E/resumptions",
+    ]
+
+
+def test_httpx_transport_is_a_client_input_error() -> None:
+    transport = httpx.MockTransport(lambda _r: httpx.Response(200))
+    with pytest.raises(ClientInputError, match="httpx2"):
+        ArbitrClient(api_key="k", transport=transport)  # ty: ignore[invalid-argument-type]
+
+
 def test_insufficient_scope_carries_required_scope() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
             403,
             json={
                 "error": {
@@ -813,8 +987,8 @@ def test_insufficient_scope_carries_required_scope() -> None:
 def test_unsupported_upload_422_carries_supported_formats() -> None:
     formats = [".csv", ".docx", ".txt"]
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
             422,
             json={
                 "error": {
@@ -880,6 +1054,29 @@ def test_from_env_env_alias_beats_dotenv_canonical(
     assert client.api_key == "fromenv"
 
 
+def test_from_env_env_key_ignores_hosts_only_in_dotenv(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = tmp_path / ".env"
+    env.write_text(
+        "ARBITR_API_KEY=fromfile\n"
+        "ARBITR_BASE_URL=https://api.dotenv.example\n"
+        "ARBITR_UI_URL=https://ui.dotenv.example\n"
+    )
+    monkeypatch.setenv("ARBITR_API_KEY", "fromenv")
+    client = ArbitrClient.from_env(env)
+    assert client.api_key == "fromenv"
+    assert client.base_url == "https://api.arbitr.ai"
+    assert client.ui_base_url == DEFAULT_UI_URL
+
+    explicit = ArbitrClient.from_env(env, api_key="explicit")
+    assert explicit.base_url == "https://api.arbitr.ai"
+
+    monkeypatch.setenv("ARBITR_BASE_URL", "https://api.env.example")
+    assert ArbitrClient.from_env(env).base_url == "https://api.env.example"
+    assert ArbitrClient.from_env(env, base_url="https://api.arg").base_url == "https://api.arg"
+
+
 def test_from_env_without_key_raises_precise_error(
     tmp_path: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -910,3 +1107,20 @@ def test_client_input_errors_are_not_value_error() -> None:
     assert issubclass(ProjectWaitTimeoutError, ArbitrClientError)
     assert issubclass(ResponseParseError, ArbitrClientError)
     assert issubclass(ResponseDecodeError, ArbitrClientError)
+
+
+def test_user_agent_suffix() -> None:
+    seen: list[str] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        seen.append(request.headers["User-Agent"])
+        return httpx2.Response(200, json={"balance": 1})
+
+    client = ArbitrClient(
+        api_key="py_test_abc123",
+        base_url="https://api.test",
+        transport=httpx2.MockTransport(handler),
+        user_agent="slack-service",
+    )
+    client.credits.balance()
+    assert seen == [f"arbitr-python/{arbitr.__version__} slack-service"]
