@@ -102,3 +102,47 @@ def test_use_tolerant_enums_rejects_a_surviving_bare_strenum() -> None:
     )
     with pytest.raises(SystemExit, match="survived"):
         generate_models.use_tolerant_enums(text)
+
+
+# datamodel-code-generator's raw output, before ruff normalises the quotes.
+_FINDING_UNION_TEXT = (
+    "from typing import Annotated, Literal\n"
+    "\n"
+    "from pydantic import BaseModel, ConfigDict, Field\n"
+    "\n"
+    "\n"
+    "class AgentFinding(BaseModel):\n"
+    "    model_config = ConfigDict(\n"
+    "        extra='allow',\n"
+    "    )\n"
+    "    kind: Literal['agent_finding'] = Field('agent_finding', title='Kind')\n"
+    "    id: str = Field(..., title='Id')\n"
+    "\n"
+    "\n"
+    "class FlagFinding(BaseModel):\n"
+    "    kind: Literal['flag'] = Field('flag', title='Kind')\n"
+    "\n"
+    "\n"
+    "class FindingListResponse(BaseModel):\n"
+    "    findings: list[\n"
+    "        Annotated[FlagFinding | AgentFinding, Field(discriminator='kind')]\n"
+    "    ] = Field(..., title='Findings')\n"
+)
+
+
+def test_use_tolerant_findings_tags_known_kinds_and_falls_back_to_unknown_finding() -> None:
+    out = generate_models.use_tolerant_findings(_FINDING_UNION_TEXT)
+    assert "discriminator=" not in out
+    assert (
+        'Annotated[Annotated[FlagFinding, Tag("flag")]'
+        ' | Annotated[AgentFinding, Tag("agent_finding")]'
+        ' | Annotated[UnknownFinding, Tag("unknown")], Discriminator(_finding_tag)]'
+    ) in out
+    assert "return kind if kind in ('flag', 'agent_finding') else \"unknown\"" in out
+    assert "from pydantic import Discriminator, Tag\nfrom pydantic import BaseModel" in out
+    assert out.index("class UnknownFinding(BaseModel):") < out.index("class FindingListResponse(")
+
+
+def test_use_tolerant_findings_requires_the_findings_union() -> None:
+    with pytest.raises(SystemExit, match="discriminator"):
+        generate_models.use_tolerant_findings("from pydantic import BaseModel\n")

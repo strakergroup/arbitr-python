@@ -5,6 +5,13 @@ Official Python SDK + CLI for the Arbitr External API.
 Domain terms live in `CONTEXT.md`. Cursor always-on copy of the git
 policy: `.cursor/rules/public-sdk-git.mdc`.
 
+## Where changes are made
+
+The SDK is developed in Straker's internal development repository. The public
+`strakergroup/arbitr-python` repository only receives release snapshots, one
+"Release X.Y.Z" commit each, so a change made there directly is overwritten by
+the next release. Make changes in the development repository.
+
 ## Public git
 
 This repository is public. Branch names, commits, tags, and pull requests
@@ -18,7 +25,7 @@ are customer-visible.
 - Reuse a short descriptive branch (`findings-and-chain-of-custody`), not a
   ticket-prefixed name.
 - Do not commit agent working notes, implementation plans, or design specs.
-  Do not add `/docs` indexes or changelogs unless a human asked for them.
+  Do not add `/docs` indexes. `CHANGELOG.md` is the only changelog.
 
 Wrong: `fix(TICKET-1234): timestamps after staging smoke`
 
@@ -41,13 +48,19 @@ Right: `Serialize chain-of-custody timestamps with a UTC offset`
 - Default base URL is `https://api.arbitr.ai`. Pin OpenAPI from that
   host. README, CLI help, comments, and examples mention only that public
   API host.
-- Every error derives from `ArbitrBaseError`. Never let an `httpx` exception
+- Every error derives from `ArbitrBaseError`. Never let an `httpx2` exception
   reach a caller, and never let the CLI print a traceback — `cli.execute()`
   handles the whole tree.
 - Language codes on the wire are lowercase BCP-47 tags. Normalize with
-  `_projects.normalize_locale_code`; only `languages.resolve()` may expand a
-  bare code.
+  `_projects.normalize_locale_code`. A bare code (`ko`) is sent as given for
+  the API to check against `GET /v1/languages`; do not refuse it locally. Only
+  `languages.resolve()` may expand a bare code.
 - Bump the version in `src/arbitr/_version.py` only; Hatch reads it from there.
+- Every release needs a `## X.Y.Z` section in `CHANGELOG.md`, written for an
+  external caller. The release refuses to run without it.
+- The library must import without Typer: the CLI is the optional `cli` extra, and
+  only `arbitr/cli.py` imports `typer`. The console script goes through
+  `_cli_entry.py`, which names the extra when it is missing.
 
 ## Checks
 
@@ -59,5 +72,5 @@ uv run pytest
 uv run python scripts/check_operation_coverage.py
 ```
 
-Unit tests use `httpx.MockTransport` / `respx` at the HTTP edge. No live API
+Unit tests use `httpx2.MockTransport` / `respx` (via `pytest-httpx2`) at the HTTP edge. No live API
 calls in CI.

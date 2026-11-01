@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import httpx
+import httpx2
 import pytest
 
 from arbitr import (
@@ -76,7 +76,7 @@ def make_client(handler: Any) -> ArbitrClient:
     return ArbitrClient(
         api_key="py_test_abc123",
         base_url="https://api.test",
-        transport=httpx.MockTransport(handler),
+        transport=httpx2.MockTransport(handler),
     )
 
 
@@ -101,8 +101,8 @@ def test_timeout_errors_are_also_builtin_timeouts() -> None:
 def error_response(status: int, code: str, **extra: Any) -> Any:
     body = {"error": {"code": code, "message": "boom", "request_id": "r-1", **extra}}
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(status, json=body)
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(status, json=body)
 
     return handler
 
@@ -196,18 +196,18 @@ def test_conflict_current_status_ignores_non_string() -> None:
 
 
 def raising_transport(exc: Exception) -> Any:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         raise exc
 
     return handler
 
 
 TRANSPORT_CASES = [
-    (httpx.ConnectError("refused"), ConnectionFailedError),
-    (httpx.ReadError("reset"), ConnectionFailedError),
-    (httpx.ConnectTimeout("too slow"), RequestTimeoutError),
-    (httpx.ReadTimeout("too slow"), RequestTimeoutError),
-    (httpx.ProtocolError("bad framing"), ConnectionFailedError),
+    (httpx2.ConnectError("refused"), ConnectionFailedError),
+    (httpx2.ReadError("reset"), ConnectionFailedError),
+    (httpx2.ConnectTimeout("too slow"), RequestTimeoutError),
+    (httpx2.ReadTimeout("too slow"), RequestTimeoutError),
+    (httpx2.ProtocolError("bad framing"), ConnectionFailedError),
 ]
 
 
@@ -219,10 +219,10 @@ def test_sync_transport_failures_are_translated(
     with make_client(raising_transport(raised)) as client, pytest.raises(expected) as caught:
         client.me()
     assert isinstance(caught.value, ArbitrBaseError)
-    assert not isinstance(caught.value, httpx.HTTPError)
+    assert not isinstance(caught.value, httpx2.HTTPError)
     assert caught.value.method == "GET"
     assert caught.value.url.endswith("/v1/me")
-    assert isinstance(caught.value.__cause__, httpx.HTTPError)
+    assert isinstance(caught.value.__cause__, httpx2.HTTPError)
 
 
 @pytest.mark.parametrize(("raised", "expected"), TRANSPORT_CASES)
@@ -232,16 +232,16 @@ async def test_async_transport_failures_are_translated(
     async with AsyncArbitrClient(
         api_key="py_test_abc123",
         base_url="https://api.test",
-        transport=httpx.MockTransport(raising_transport(raised)),
+        transport=httpx2.MockTransport(raising_transport(raised)),
     ) as client:
         with pytest.raises(expected) as caught:
             await client.me()
-    assert not isinstance(caught.value, httpx.HTTPError)
+    assert not isinstance(caught.value, httpx2.HTTPError)
     assert caught.value.method == "GET"
 
 
 def test_transport_failure_during_download_is_translated(tmp_path: Any) -> None:
-    handler = raising_transport(httpx.ConnectError("refused"))
+    handler = raising_transport(httpx2.ConnectError("refused"))
     with make_client(handler) as client, pytest.raises(ConnectionFailedError):
         client.projects.download_zip("p", tmp_path / "out.zip")
 
@@ -250,14 +250,14 @@ async def test_async_transport_failure_during_download_is_translated(tmp_path: A
     async with AsyncArbitrClient(
         api_key="py_test_abc123",
         base_url="https://api.test",
-        transport=httpx.MockTransport(raising_transport(httpx.ConnectError("refused"))),
+        transport=httpx2.MockTransport(raising_transport(httpx2.ConnectError("refused"))),
     ) as client:
         with pytest.raises(ConnectionFailedError):
             await client.projects.download_zip("p", tmp_path / "out.zip")
 
 
 def test_transport_error_message_names_the_request() -> None:
-    handler = raising_transport(httpx.ConnectError("refused"))
+    handler = raising_transport(httpx2.ConnectError("refused"))
     expected = r"GET https://api\.test/v1/me: refused"
     with make_client(handler) as client, pytest.raises(ConnectionFailedError, match=expected):
         client.me()
@@ -270,11 +270,11 @@ def test_missing_api_key_is_still_an_input_error() -> None:
     assert isinstance(raised.value, ArbitrBaseError)
 
 
-def _redirect(status: int, location: str, *, requested: str) -> httpx.Response:
-    return httpx.Response(
+def _redirect(status: int, location: str, *, requested: str) -> httpx2.Response:
+    return httpx2.Response(
         status,
         headers={"Location": location},
-        request=httpx.Request("GET", requested),
+        request=httpx2.Request("GET", requested),
     )
 
 
@@ -347,6 +347,6 @@ def test_unusable_location_is_still_an_arbitr_error(location: str) -> None:
 
 
 def test_redirect_without_a_request_is_a_plain_error() -> None:
-    resp = httpx.Response(301, headers={"Location": "https://api.arbitr.ai/v1/me"})
+    resp = httpx2.Response(301, headers={"Location": "https://api.arbitr.ai/v1/me"})
     err = from_response(resp)
     assert type(err) is ArbitrError

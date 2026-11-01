@@ -50,8 +50,10 @@ Run `arbitr me` before the first API operation. It returns the key's `org_id`,
 
 ## Projects
 
-Use lowercase BCP-47 locale tags such as `ko-kr` and `fr-fr`. Bare codes such
-as `ko` are rejected unless the user explicitly asks for `--resolve-locales`.
+Use lowercase BCP-47 locale tags such as `ko-kr` and `fr-fr`. Codes are sent
+as given and the API checks them against `GET /v1/languages`; an unrecognised
+one fails with a 422. For a bare code such as `ko`, find the exact tag with
+`arbitr languages --search`, or pass `--resolve-locales` if the user asks for it.
 
 Before composing a command, run `arbitr COMMAND --help` for the relevant
 operation. For a standard unattended translation, submit with `--wait` and an

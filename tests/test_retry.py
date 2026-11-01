@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import httpx
+import httpx2
 import pytest
 
 from arbitr import (
@@ -26,7 +26,7 @@ def sync_client(handler: Any, **kwargs: Any) -> ArbitrClient:
     return ArbitrClient(
         api_key="py_test_abc123",
         base_url="https://api.test",
-        transport=httpx.MockTransport(handler),
+        transport=httpx2.MockTransport(handler),
         **kwargs,
     )
 
@@ -35,7 +35,7 @@ def async_client(handler: Any, **kwargs: Any) -> AsyncArbitrClient:
     return AsyncArbitrClient(
         api_key="py_test_abc123",
         base_url="https://api.test",
-        transport=httpx.MockTransport(handler),
+        transport=httpx2.MockTransport(handler),
         **kwargs,
     )
 
@@ -57,17 +57,17 @@ def responses(*statuses: int, headers: dict[str, str] | None = None) -> tuple[An
     calls: list[int] = []
     queue = list(statuses)
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         if queue:
             status = queue.pop(0)
             calls.append(status)
-            return httpx.Response(
+            return httpx2.Response(
                 status,
                 json={"error": {"code": "retry_me", "message": "later", "request_id": "r"}},
                 headers=headers or {},
             )
         calls.append(200)
-        return httpx.Response(200, json=BALANCE)
+        return httpx2.Response(200, json=BALANCE)
 
     return handler, calls
 
@@ -107,11 +107,11 @@ def test_non_retryable_statuses_fail_immediately(status: int) -> None:
 def test_transport_failures_are_retried_then_translated() -> None:
     attempts = {"n": 0}
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         attempts["n"] += 1
         if attempts["n"] < 3:
-            raise httpx.ConnectError("refused", request=request)
-        return httpx.Response(200, json=BALANCE)
+            raise httpx2.ConnectError("refused", request=request)
+        return httpx2.Response(200, json=BALANCE)
 
     with sync_client(handler, max_retries=3) as client:
         assert client.credits.balance().balance == 5
@@ -121,9 +121,9 @@ def test_transport_failures_are_retried_then_translated() -> None:
 def test_transport_failures_stop_at_the_retry_limit() -> None:
     attempts = {"n": 0}
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         attempts["n"] += 1
-        raise httpx.ConnectError("refused", request=request)
+        raise httpx2.ConnectError("refused", request=request)
 
     with sync_client(handler, max_retries=2) as client, pytest.raises(ConnectionFailedError):
         client.credits.balance()
@@ -134,11 +134,11 @@ def test_submit_is_never_retried_automatically() -> None:
     """A multipart body streams file handles that cannot be safely replayed."""
     calls: list[str] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         calls.append(request.method)
         if len(calls) == 1:
-            return httpx.Response(503, json={"error": {"code": "x", "message": "y"}})
-        return httpx.Response(201, json=project_json("p"))
+            return httpx2.Response(503, json={"error": {"code": "x", "message": "y"}})
+        return httpx2.Response(201, json=project_json("p"))
 
     with sync_client(handler, max_retries=5) as client, pytest.raises(ServerError):
         client.projects.submit(files=[("a.txt", b"hi")], name="x", target_language_codes=["ko-kr"])
@@ -148,9 +148,9 @@ def test_submit_is_never_retried_automatically() -> None:
 def test_resumption_posts_are_never_retried() -> None:
     calls: list[str] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         calls.append(request.method)
-        return httpx.Response(503, json={"error": {"code": "x", "message": "y"}})
+        return httpx2.Response(503, json={"error": {"code": "x", "message": "y"}})
 
     with sync_client(handler, max_retries=5) as client, pytest.raises(ServerError):
         client.projects.resume("p")
@@ -165,35 +165,35 @@ def test_only_get_is_replayable() -> None:
 
 
 def test_retry_after_header_drives_the_429_delay() -> None:
-    resp = httpx.Response(429, headers={"Retry-After": "7"})
+    resp = httpx2.Response(429, headers={"Retry-After": "7"})
     assert retry_delay(resp, attempt=0) == 7.0
 
 
 def test_retry_after_is_capped_and_floored() -> None:
-    assert retry_delay(httpx.Response(429, headers={"Retry-After": "99999"}), 0) == 60.0
-    assert retry_delay(httpx.Response(429, headers={"Retry-After": "-5"}), 0) == 0.0
+    assert retry_delay(httpx2.Response(429, headers={"Retry-After": "99999"}), 0) == 60.0
+    assert retry_delay(httpx2.Response(429, headers={"Retry-After": "-5"}), 0) == 0.0
 
 
 def test_malformed_retry_after_falls_back_to_backoff() -> None:
-    assert retry_delay(httpx.Response(429, headers={"Retry-After": "soon"}), 0) == 0.5
+    assert retry_delay(httpx2.Response(429, headers={"Retry-After": "soon"}), 0) == 0.5
 
 
 def test_missing_retry_after_falls_back_to_backoff() -> None:
-    assert retry_delay(httpx.Response(429), 0) == 0.5
+    assert retry_delay(httpx2.Response(429), 0) == 0.5
 
 
 def test_server_errors_use_exponential_backoff() -> None:
-    delays = [retry_delay(httpx.Response(503), attempt) for attempt in range(5)]
+    delays = [retry_delay(httpx2.Response(503), attempt) for attempt in range(5)]
     assert delays == [0.5, 1.0, 2.0, 4.0, 8.0]
 
 
 def test_backoff_is_capped() -> None:
-    assert retry_delay(httpx.Response(503), attempt=40) == 60.0
+    assert retry_delay(httpx2.Response(503), attempt=40) == 60.0
 
 
 def test_non_retryable_status_has_no_delay() -> None:
-    assert retry_delay(httpx.Response(404), 0) is None
-    assert retry_delay(httpx.Response(200), 0) is None
+    assert retry_delay(httpx2.Response(404), 0) is None
+    assert retry_delay(httpx2.Response(200), 0) is None
 
 
 @pytest.mark.parametrize("bad", [-1, "3", 1.5, True])
@@ -203,8 +203,8 @@ def test_max_retries_is_validated(bad: Any) -> None:
 
 
 def test_rate_limit_headers_are_exposed() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
             200,
             json=BALANCE,
             headers={
@@ -223,10 +223,10 @@ def test_rate_limit_headers_are_exposed() -> None:
 def test_rate_limit_snapshot_survives_a_response_without_the_headers() -> None:
     seen = {"n": 0}
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         seen["n"] += 1
         headers = {"X-RateLimit-Remaining": "5"} if seen["n"] == 1 else {}
-        return httpx.Response(200, json=BALANCE, headers=headers)
+        return httpx2.Response(200, json=BALANCE, headers=headers)
 
     with sync_client(handler) as client:
         client.credits.balance()
@@ -252,11 +252,11 @@ async def test_async_retries_give_up_and_raise() -> None:
 async def test_async_transport_failures_are_retried() -> None:
     attempts = {"n": 0}
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         attempts["n"] += 1
         if attempts["n"] < 2:
-            raise httpx.ConnectError("refused", request=request)
-        return httpx.Response(200, json=BALANCE)
+            raise httpx2.ConnectError("refused", request=request)
+        return httpx2.Response(200, json=BALANCE)
 
     async with async_client(handler, max_retries=2) as client:
         assert (await client.credits.balance()).balance == 5
@@ -264,8 +264,8 @@ async def test_async_transport_failures_are_retried() -> None:
 
 
 async def test_async_exposes_rate_limit_headers() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=BALANCE, headers={"X-RateLimit-Remaining": "12"})
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=BALANCE, headers={"X-RateLimit-Remaining": "12"})
 
     async with async_client(handler) as client:
         await client.credits.balance()
@@ -282,16 +282,16 @@ def zip_then_error_handler(*statuses: int, payload: bytes = b"PKZIP") -> tuple[A
     calls: list[int] = []
     queue = list(statuses)
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         if queue:
             status = queue.pop(0)
             calls.append(status)
-            return httpx.Response(
+            return httpx2.Response(
                 status,
                 json={"error": {"code": "retry_me", "message": "later", "request_id": "r"}},
             )
         calls.append(200)
-        return httpx.Response(200, content=payload, headers={"X-RateLimit-Remaining": "4"})
+        return httpx2.Response(200, content=payload, headers={"X-RateLimit-Remaining": "4"})
 
     return handler, calls
 

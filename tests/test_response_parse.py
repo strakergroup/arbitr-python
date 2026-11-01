@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-import httpx
+import httpx2
 import pytest
 
 from arbitr import ProjectResponse, ResponseDecodeError, ResponseParseError
@@ -16,6 +16,7 @@ from arbitr.generated.models import (
     FlagFinding,
     HumanReviewResponse,
     HumanReviewStatus,
+    UnknownFinding,
 )
 from payloads import agent_finding_json, flag_finding_json, human_review_json, project_json
 
@@ -46,17 +47,17 @@ def test_parse_response_missing_required_field_is_typed() -> None:
 
 
 def test_decode_json_body_parses_an_object() -> None:
-    resp = httpx.Response(200, json={"ok": True})
+    resp = httpx2.Response(200, json={"ok": True})
     assert decode_json_body(resp, operation="getCurrentKey") == {"ok": True}
 
 
 def test_decode_json_body_treats_empty_as_none() -> None:
-    resp = httpx.Response(200, content=b"")
+    resp = httpx2.Response(200, content=b"")
     assert decode_json_body(resp, operation="getCurrentKey") is None
 
 
 def test_malformed_json_is_a_typed_decode_error() -> None:
-    resp = httpx.Response(200, content=b"<html>nope</html>")
+    resp = httpx2.Response(200, content=b"<html>nope</html>")
     with pytest.raises(ResponseDecodeError, match="getCurrentKey") as raised:
         decode_json_body(resp, operation="getCurrentKey")
     assert raised.value.operation == "getCurrentKey"
@@ -113,6 +114,39 @@ def test_one_unknown_finding_type_does_not_fail_the_whole_page() -> None:
     known = page.findings[1]
     assert isinstance(known, AgentFinding)
     assert known.finding_type is FindingType.substitution
+
+
+def test_a_finding_kind_this_build_does_not_know_parses_beside_known_ones() -> None:
+    page = parse_response(
+        FindingListResponse,
+        {
+            "findings": [
+                flag_finding_json("flag-1"),
+                {"kind": "suggestion", "id": "find-2", "note": "consider this"},
+                agent_finding_json("find-3"),
+            ],
+            "page": {"has_more": False, "limit": 50, "after": None},
+        },
+        operation="listProjectFindings",
+    )
+    flag, unknown, agent = page.findings
+    assert isinstance(flag, FlagFinding)
+    assert isinstance(agent, AgentFinding)
+    assert isinstance(unknown, UnknownFinding)
+    assert unknown.kind == "suggestion"
+    assert unknown.id == "find-2"
+    assert unknown.model_extra == {"note": "consider this"}
+
+
+def test_a_malformed_finding_of_a_known_kind_still_fails_the_page() -> None:
+    body = flag_finding_json()
+    del body["severity"]
+    with pytest.raises(ResponseParseError):
+        parse_response(
+            FindingListResponse,
+            {"findings": [body], "page": {"has_more": False, "limit": 50, "after": None}},
+            operation="listProjectFindings",
+        )
 
 
 def test_flag_finding_accepts_an_unknown_severity_and_status() -> None:

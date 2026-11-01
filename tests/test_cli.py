@@ -9,6 +9,7 @@ from collections.abc import Iterator
 from io import BytesIO
 from pathlib import Path
 
+import httpcore2
 import httpx
 import pytest
 import respx
@@ -43,7 +44,9 @@ def runner() -> CliRunner:
 
 @pytest.fixture
 def api() -> Iterator[respx.MockRouter]:
-    with respx.mock(base_url="https://api.test", assert_all_called=True) as router:
+    with respx.mock(
+        base_url="https://api.test", using="httpcore2", assert_all_called=True
+    ) as router:
         yield router
 
 
@@ -198,7 +201,7 @@ def test_version_flag_prints_the_packaged_version(runner: CliRunner) -> None:
 
 
 def test_version_flag_does_not_need_a_command(runner: CliRunner) -> None:
-    with respx.mock(base_url="https://api.test") as router:
+    with respx.mock(base_url="https://api.test", using="httpcore2") as router:
         result = runner.invoke(app, ["--version", "credits"], env=ENV)
     assert result.exit_code == 0
     assert arbitr.__version__ in result.output
@@ -223,8 +226,10 @@ def assert_no_traceback(result: Result, *, exit_code: int) -> None:
 
 def test_unreachable_host_reports_cleanly(runner: CliRunner) -> None:
     """Regression: a transport failure used to print a Rich traceback."""
-    with respx.mock(base_url="https://api.test") as router:
-        router.get("/v1/credits/balance").mock(side_effect=httpx.ConnectError("Connection refused"))
+    with respx.mock(base_url="https://api.test", using="httpcore2") as router:
+        router.get("/v1/credits/balance").mock(
+            side_effect=httpcore2.ConnectError("Connection refused")
+        )
         result = runner.invoke(app, ["--max-retries", "0", "credits"], env=ENV)
     assert_no_traceback(result, exit_code=2)
     assert "Connection refused" in result.stderr
@@ -234,7 +239,7 @@ def test_unreachable_host_reports_cleanly(runner: CliRunner) -> None:
 
 def test_moved_host_is_a_config_error_naming_the_new_host(runner: CliRunner) -> None:
     """A stale ARBITR_BASE_URL is fixed by the operator, so it exits 2 like other config errors."""
-    with respx.mock(base_url="https://api.test") as router:
+    with respx.mock(base_url="https://api.test", using="httpcore2") as router:
         route = router.get("/v1/credits/balance").mock(
             return_value=httpx.Response(
                 301, headers={"location": "https://api.arbitr.ai/v1/credits/balance"}
@@ -254,8 +259,8 @@ def test_help_names_where_to_mint_a_key(runner: CliRunner) -> None:
 
 
 def test_request_timeout_reports_cleanly(runner: CliRunner) -> None:
-    with respx.mock(base_url="https://api.test") as router:
-        router.get("/v1/me").mock(side_effect=httpx.ReadTimeout("timed out"))
+    with respx.mock(base_url="https://api.test", using="httpcore2") as router:
+        router.get("/v1/me").mock(side_effect=httpcore2.ReadTimeout("timed out"))
         result = runner.invoke(app, ["--max-retries", "0", "me"], env=ENV)
     assert_no_traceback(result, exit_code=2)
     assert "timed out" in result.stderr
@@ -341,12 +346,26 @@ def test_submit_resolve_locales_expands_bare_codes(
     assert json.dumps(["ja-jp"]).encode() in route.calls.last.request.content
 
 
-def test_submit_rejects_bare_locale_without_resolve(runner: CliRunner, tmp_path: Path) -> None:
-    src = tmp_path / "doc.txt"
+def test_submit_leaves_a_bare_locale_for_the_api_to_refuse(
+    runner: CliRunner, api: respx.MockRouter
+) -> None:
+    """``ko`` isn't a catalogue tag, but ``ar`` is: only the API can tell them apart."""
+    route = api.post("/v1/projects").respond(
+        422,
+        json={
+            "error": {
+                "code": "validation_failed",
+                "message": "locale 'ko' is not in the language catalog",
+                "request_id": "req-1",
+            }
+        },
+    )
+    src = Path("doc.txt")
     src.write_text("hello")
     result = runner.invoke(app, ["submit", str(src), "--locales", "ko"], env=ENV)
-    assert_no_traceback(result, exit_code=2)
-    assert "bare language code" in result.stderr
+    assert_no_traceback(result, exit_code=1)
+    assert json.dumps(["ko"]).encode() in route.calls.last.request.content
+    assert "not in the language catalog" in result.stderr
 
 
 def test_submit_resolve_locales_reports_ambiguity(runner: CliRunner, api: respx.MockRouter) -> None:
@@ -368,6 +387,7 @@ def test_locales_help_recommends_full_tags(runner: CliRunner) -> None:
     help_text = " ".join(result.output.split())
     assert "ko-kr,fr-fr" in help_text
     assert "ko,fr-FR" not in help_text
+    assert "rejected" not in help_text
 
 
 def track_clients(monkeypatch: pytest.MonkeyPatch) -> list[ArbitrClient]:

@@ -29,7 +29,7 @@ from arbitr._projects import (
     project_submit_form,
 )
 from arbitr._wait import decide_project_wait
-from arbitr.errors import BareLocaleCodeError, ClientInputError, FindingsKeysetError
+from arbitr.errors import ClientInputError, FindingsKeysetError
 from arbitr.generated.models import ProjectResponse
 from payloads import project_json
 
@@ -97,11 +97,9 @@ class TestLocaleNormalization:
     def test_codes_are_lowercased_and_trimmed(self, raw: str, expected: str) -> None:
         assert normalize_locale_code(raw) == expected
 
-    def test_bare_codes_are_rejected(self) -> None:
-        """Expanding `fr` would pick a region for the caller; resolve() does that."""
-        with pytest.raises(BareLocaleCodeError) as raised:
-            normalize_locale_code("FR")
-        assert raised.value.code == "FR"
+    def test_region_less_codes_are_kept_for_the_api_to_check(self) -> None:
+        """`ar` is a catalogue tag; a bare `fr` is not, and the API says so."""
+        assert normalize_locale_code(" AR ") == "ar"
 
     def test_empty_codes_are_rejected(self) -> None:
         with pytest.raises(ClientInputError, match="must not be empty"):
@@ -327,6 +325,24 @@ class TestDownloadWriters:
         dest = tmp_path / "out.bin"
         asyncio.run(awrite_download_file(dest, achunks()))
         assert dest.read_bytes() == self.expected(500)
+
+    def test_async_writer_writes_each_chunk_before_the_next_arrives(self, tmp_path: Path) -> None:
+        dest = tmp_path / "out.bin"
+        chunk = b"x" * 65536
+        on_disk: list[int] = []
+
+        def part_file_size() -> None:
+            [part] = tmp_path.glob("*.part")
+            on_disk.append(part.stat().st_size)
+
+        async def achunks() -> AsyncIterator[bytes]:
+            for _ in range(3):
+                yield chunk
+                part_file_size()
+
+        asyncio.run(awrite_download_file(dest, achunks()))
+        assert on_disk == [len(chunk), 2 * len(chunk), 3 * len(chunk)]
+        assert dest.read_bytes() == chunk * 3
 
     def test_async_writer_cleans_up_after_a_mid_stream_failure(self, tmp_path: Path) -> None:
         dest = tmp_path / "out.bin"

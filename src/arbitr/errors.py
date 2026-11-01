@@ -11,7 +11,7 @@ import json
 from typing import TYPE_CHECKING, Any, ClassVar
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
-import httpx
+import httpx2
 from pydantic import ValidationError as PydanticValidationError
 
 if TYPE_CHECKING:
@@ -108,7 +108,7 @@ class GoneError(ArbitrError):
 class ApiMovedError(ArbitrError):
     """301/308 to another host — the API relocated; point ``base_url`` at ``moved_to``.
 
-    Redirects are never followed: httpx keeps ``X-API-Key`` on a cross-host
+    Redirects are never followed: httpx2 keeps ``X-API-Key`` on a cross-host
     redirect, so following one would hand the key to whatever host the
     redirect names. Fix the configuration instead.
     """
@@ -156,8 +156,8 @@ class ArbitrClientError(ArbitrBaseError):
 class TransportError(ArbitrClientError):
     """The request never produced an HTTP response.
 
-    Wraps the underlying ``httpx`` failure so callers never need to import
-    ``httpx`` to write correct error handling. The original exception stays
+    Wraps the underlying ``httpx2`` failure so callers never need to import
+    ``httpx2`` to write correct error handling. The original exception stays
     available as ``__cause__``.
     """
 
@@ -267,7 +267,12 @@ class ResponseDecodeError(ArbitrClientError):
 
 
 class BareLocaleCodeError(ClientInputError):
-    """A locale was a bare language code rather than a full BCP-47 tag."""
+    """A locale was a bare language code rather than a full BCP-47 tag.
+
+    No longer raised: locale codes are sent as given for the API to check
+    against GET /v1/languages. Kept only so existing ``except`` clauses still
+    import; it will be removed in a future minor release.
+    """
 
     def __init__(self, code: str) -> None:
         self.code = code
@@ -329,7 +334,7 @@ _STATUS_MAP: dict[int, type[ArbitrError]] = {
 _ENVELOPE_META_KEYS = frozenset({"code", "message", "request_id", "field_errors"})
 
 
-def _parse_error_envelope(resp: httpx.Response) -> dict[str, Any]:
+def _parse_error_envelope(resp: httpx2.Response) -> dict[str, Any]:
     """Extract the API's ``{"error": {...}}`` envelope; ``{}`` when absent."""
     try:
         body = resp.json()
@@ -342,7 +347,7 @@ def _parse_error_envelope(resp: httpx.Response) -> dict[str, Any]:
 _PERMANENT_REDIRECTS = frozenset({301, 308})
 
 
-def _moved_origin(resp: httpx.Response) -> str | None:
+def _moved_origin(resp: httpx2.Response) -> str | None:
     """Origin a permanent redirect points at, when it is a different host.
 
     Same-host redirects (production canonicalises a trailing slash with one)
@@ -366,7 +371,7 @@ def _moved_origin(resp: httpx.Response) -> str | None:
     return urlunsplit((target.scheme, target.netloc, "", "", ""))
 
 
-def from_response(resp: httpx.Response) -> ArbitrError:
+def from_response(resp: httpx2.Response) -> ArbitrError:
     """Build the most specific ArbitrError from an error response."""
     moved_to = _moved_origin(resp)
     if moved_to is not None:
@@ -398,16 +403,16 @@ def from_response(resp: httpx.Response) -> ArbitrError:
     )
 
 
-def from_transport_error(exc: httpx.HTTPError) -> TransportError:
-    """Translate an httpx transport failure into this package's error tree."""
+def from_transport_error(exc: httpx2.HTTPError) -> TransportError:
+    """Translate an httpx2 transport failure into this package's error tree."""
     request = getattr(exc, "request", None)
     method = request.method if request is not None else "?"
     url = str(request.url) if request is not None else "?"
     message = str(exc) or type(exc).__name__
     cls: type[TransportError]
-    if isinstance(exc, httpx.TimeoutException):
+    if isinstance(exc, httpx2.TimeoutException):
         cls = RequestTimeoutError
-    elif isinstance(exc, httpx.TransportError):
+    elif isinstance(exc, httpx2.TransportError):
         cls = ConnectionFailedError
     else:
         cls = TransportError

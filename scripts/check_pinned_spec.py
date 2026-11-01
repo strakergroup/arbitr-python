@@ -24,7 +24,7 @@ import sys
 import traceback
 from pathlib import Path
 
-import httpx
+import httpx2
 
 from arbitr._spec import (
     PROD_OPENAPI_URL,
@@ -77,14 +77,14 @@ def fetch_openapi_url(url: str) -> dict[str, object]:
         OpenAPIDocumentError: If the body is not a JSON object.
     """
     try:
-        response = httpx.get(url, timeout=_FETCH_TIMEOUT_SECONDS, follow_redirects=False)
+        response = httpx2.get(url, timeout=_FETCH_TIMEOUT_SECONDS, follow_redirects=False)
         if response.is_redirect:
             raise SpecMovedError(
                 f"{url} redirects to {response.headers.get('location', '?')}: "
                 "production moved; update DEFAULT_BASE_URL and re-pin the spec"
             )
         response.raise_for_status()
-    except httpx.HTTPError as exc:
+    except httpx2.HTTPError as exc:
         raise SpecFetchError(f"failed to fetch {url}") from exc
     return parse_openapi_document(response.text, source=url)
 

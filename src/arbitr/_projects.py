@@ -8,7 +8,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 
 from arbitr._constants import DEFAULT_WORKFLOW
-from arbitr.errors import BareLocaleCodeError, ClientInputError, FindingsKeysetError
+from arbitr.errors import ClientInputError, FindingsKeysetError
 
 
 class ProjectResumptionResponse(BaseModel):
@@ -30,19 +30,18 @@ def normalize_locale_code(code: str) -> str:
     """Lowercase and trim one locale code for the wire.
 
     The API accepts lowercase BCP-47 tags only; the tags are case-insensitive
-    by spec, so folding ``fr-FR`` to ``fr-fr`` is safe. Bare language codes
-    such as ``fr`` are rejected here — only ``languages.resolve()`` may expand
-    those, and guessing a region would pick one on the caller's behalf.
+    by spec, so folding ``fr-FR`` to ``fr-fr`` is safe. A code without a region
+    is sent as given and the API checks it against GET /v1/languages, answering
+    a 422 ``ValidationError`` for one it does not recognise. Only
+    ``languages.resolve()`` expands ``fr`` to a tag, since that picks a region
+    on the caller's behalf.
 
     Raises:
         ClientInputError: If the code is empty after trimming.
-        BareLocaleCodeError: If the code has no subtag (no hyphen).
     """
     normalized = code.strip().lower()
     if not normalized:
         raise ClientInputError("locale code must not be empty")
-    if "-" not in normalized:
-        raise BareLocaleCodeError(code.strip())
     return normalized
 
 
@@ -74,13 +73,30 @@ def project_list_params(
     page: int,
     modified_after: str | None,
     status: str | None,
+    requester_tenant_id: str | None = None,
+    requester_external_id: str | None = None,
+    q: str | None = None,
 ) -> dict[str, Any]:
-    """Query params for GET /v1/projects."""
+    """Query params for GET /v1/projects.
+
+    Raises:
+        ClientInputError: If only one of the two requester ids is given; the
+            API rejects that, so fail before the round trip.
+    """
+    if bool(requester_tenant_id) != bool(requester_external_id):
+        raise ClientInputError(
+            "requester_tenant_id and requester_external_id must be sent together"
+        )
     params: dict[str, Any] = {"limit": limit, "page": page}
     if modified_after:
         params["modified_after"] = modified_after
     if status:
         params["status"] = status
+    if requester_tenant_id and requester_external_id:
+        params["requester_tenant_id"] = requester_tenant_id
+        params["requester_external_id"] = requester_external_id
+    if q:
+        params["q"] = q
     return params
 
 
