@@ -17,8 +17,8 @@ def text_translate_body(
 ) -> dict[str, Any]:
     """JSON body for POST /v1/text/translate.
 
-    ``TextToTranslate`` already holds lowercase tags. Region-less ones are sent
-    as given: some, such as ``ar``, are catalogue tags in their own right.
+    Locale codes are sent as given, in any case: the API checks them against
+    ``GET /v1/languages``. Region-less ones such as ``ar`` can be catalogue tags.
     Omitted options are left out so the API's defaults apply.
     """
     body: dict[str, Any] = {

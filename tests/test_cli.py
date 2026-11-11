@@ -22,11 +22,13 @@ from arbitr import DEFAULT_UI_URL, ArbitrClient
 from arbitr.cli import app
 from payloads import (
     agent_finding_json,
+    balance_json,
     chain_of_custody_json,
     finding_list_json,
     flag_finding_json,
     language_list_json,
     project_json,
+    quote_json,
 )
 
 ENV = {
@@ -51,10 +53,10 @@ def api() -> Iterator[respx.MockRouter]:
 
 
 def test_credits(runner: CliRunner, api: respx.MockRouter) -> None:
-    api.get("/v1/credits/balance").respond(200, json={"balance": 42})
+    api.get("/v1/credits/balance").respond(200, json=balance_json(42))
     result = runner.invoke(app, ["credits"], env=ENV)
     assert result.exit_code == 0
-    assert json.loads(result.output) == {"balance": 42}
+    assert json.loads(result.output) == balance_json(42)
 
 
 def test_submit_wait_download(runner: CliRunner, api: respx.MockRouter, tmp_path: Path) -> None:
@@ -120,6 +122,7 @@ def test_wait_exits_3_at_agent_selection_gate(runner: CliRunner, api: respx.Mock
     assert result.exit_code == 3
     assert "action required" in result.stderr
     assert "Start Campaign" in result.stderr
+    assert "projects.confirm" in result.stderr
 
 
 def test_link_command(runner: CliRunner) -> None:
@@ -149,11 +152,11 @@ def test_cli_retries_a_429_by_default(runner: CliRunner, api: respx.MockRouter) 
             json={"error": {"code": "rate_limited", "message": "slow"}},
             headers={"Retry-After": "0"},
         ),
-        httpx.Response(200, json={"balance": 9}),
+        httpx.Response(200, json=balance_json(9)),
     ]
     result = runner.invoke(app, ["credits"], env=ENV)
     assert result.exit_code == 0
-    assert json.loads(result.output) == {"balance": 9}
+    assert json.loads(result.output) == balance_json(9)
     assert route.call_count == 2
 
 
@@ -409,7 +412,7 @@ def test_client_is_closed_after_each_command(
 ) -> None:
     """Regression: the CLI used to leak an open httpx client per invocation."""
     built = track_clients(monkeypatch)
-    api.get("/v1/credits/balance").respond(200, json={"balance": 1})
+    api.get("/v1/credits/balance").respond(200, json=balance_json(1))
     result = runner.invoke(app, ["credits"], env=ENV)
     assert result.exit_code == 0
     assert len(built) == 1
@@ -650,3 +653,178 @@ def test_resume_human_review(runner: CliRunner, api: respx.MockRouter) -> None:
     result = runner.invoke(app, ["resume", "p", "--human-review"], env=ENV)
     assert result.exit_code == 0
     assert json.loads(result.output)["status"] == "queued"
+
+
+def test_submit_hold_for_quote_sends_hold_and_reference(
+    runner: CliRunner, api: respx.MockRouter, tmp_path: Path
+) -> None:
+    route = api.post("/v1/projects").respond(
+        201, json=project_json("p-1", status="extracting", reference="JOB-42")
+    )
+    src = tmp_path / "doc.txt"
+    src.write_text("hello")
+    result = runner.invoke(
+        app,
+        ["submit", str(src), "--locales", "fr-fr", "--hold-for-quote", "--reference", "JOB-42"],
+        env=ENV,
+    )
+    assert result.exit_code == 0, result.output
+    body = route.calls.last.request.content
+    assert b'name="hold_for_quote"\r\n\r\ntrue' in body
+    assert b'name="reference"\r\n\r\nJOB-42' in body
+
+
+def test_submit_refuses_hold_for_quote_with_wait(runner: CliRunner, tmp_path: Path) -> None:
+    src = tmp_path / "doc.txt"
+    src.write_text("hello")
+    result = runner.invoke(
+        app, ["submit", str(src), "--locales", "fr-fr", "--hold-for-quote", "--wait"], env=ENV
+    )
+    assert result.exit_code == 2
+    assert "arbitr confirm" in result.output
+
+
+def test_quote_waits_while_pricing(runner: CliRunner, api: respx.MockRouter) -> None:
+    route = api.get("/v1/projects/p/quote")
+    route.side_effect = [
+        httpx.Response(200, json=quote_json("p", status="pricing", lines=[], fees=[])),
+        httpx.Response(200, json=quote_json("p", version=2)),
+    ]
+    result = runner.invoke(app, ["quote", "p", "--wait", "--interval", "0"], env=ENV)
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["version"] == 2
+    assert route.call_count == 2
+
+
+def test_quote_without_wait_prints_pricing(runner: CliRunner, api: respx.MockRouter) -> None:
+    api.get("/v1/projects/p/quote").respond(
+        200, json=quote_json("p", status="pricing", lines=[], fees=[])
+    )
+    result = runner.invoke(app, ["quote", "p"], env=ENV)
+    assert result.exit_code == 0
+    assert json.loads(result.output)["status"] == "pricing"
+
+
+def test_quote_wait_times_out(runner: CliRunner, api: respx.MockRouter) -> None:
+    api.get("/v1/projects/p/quote").respond(
+        200, json=quote_json("p", status="pricing", lines=[], fees=[])
+    )
+    result = runner.invoke(
+        app, ["quote", "p", "--wait", "--timeout", "0", "--interval", "0"], env=ENV
+    )
+    assert result.exit_code == 2
+    assert "pricing" in result.output
+
+
+def test_adjust_sends_removed_pairs(runner: CliRunner, api: respx.MockRouter) -> None:
+    route = api.post("/v1/projects/p/quote/adjustments").respond(
+        201, json=quote_json("p", version=3)
+    )
+    result = runner.invoke(
+        app,
+        ["adjust", "p", "--quote-version", "2", "--remove", "f-1:de-de", "--remove", "f-2:fr-fr"],
+        env=ENV,
+    )
+    assert result.exit_code == 0, result.output
+    assert json.loads(route.calls.last.request.content) == {
+        "quote_version": 2,
+        "remove": [
+            {"file_id": "f-1", "target_language_code": "de-de"},
+            {"file_id": "f-2", "target_language_code": "fr-fr"},
+        ],
+    }
+
+
+def test_adjust_rejects_a_malformed_pair(runner: CliRunner) -> None:
+    result = runner.invoke(app, ["adjust", "p", "--quote-version", "2", "--remove", "f-1"], env=ENV)
+    assert result.exit_code == 2
+    assert "FILE_ID:LANGUAGE" in result.output
+
+
+def test_confirm_sends_quote_version(runner: CliRunner, api: respx.MockRouter) -> None:
+    route = api.post("/v1/projects/p/confirmations").respond(
+        201, json=quote_json("p", status="confirmed", version=3)
+    )
+    result = runner.invoke(app, ["confirm", "p", "--quote-version", "3"], env=ENV)
+    assert result.exit_code == 0, result.output
+    assert json.loads(route.calls.last.request.content) == {"quote_version": 3}
+    assert json.loads(result.output)["status"] == "confirmed"
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["quote", "p", "--wait", "--interval", "-1"],
+        ["quote", "p", "--wait", "--timeout", "nan"],
+        ["quote", "p", "--wait", "--timeout", "-5"],
+        ["quote", "p", "--wait", "--interval", "inf"],
+        ["wait", "p", "--interval", "-1"],
+    ],
+)
+def test_poll_options_reject_negative_and_non_finite_values(
+    runner: CliRunner, args: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def no_sleep(seconds: float) -> None:
+        raise AssertionError(f"slept {seconds}s: the option should have been refused")
+
+    monkeypatch.setattr("arbitr.cli.time.sleep", no_sleep)
+    monkeypatch.setattr("arbitr.client.time.sleep", no_sleep)
+    with respx.mock(
+        base_url="https://api.test", using="httpcore2", assert_all_called=False
+    ) as router:
+        router.get("/v1/projects/p/quote").respond(
+            200, json=quote_json("p", status="pricing", lines=[], fees=[])
+        )
+        router.get("/v1/projects/p").respond(200, json=project_json("p", status="extracting"))
+        result = runner.invoke(app, args, env=ENV)
+    assert result.exit_code == 2
+    assert not router.calls
+
+
+def test_quote_wait_never_sleeps_past_the_timeout(
+    runner: CliRunner, api: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    api.get("/v1/projects/p/quote").respond(
+        200, json=quote_json("p", status="pricing", lines=[], fees=[])
+    )
+    slept: list[float] = []
+    monkeypatch.setattr("arbitr.cli.time.sleep", slept.append)
+    result = runner.invoke(
+        app, ["quote", "p", "--wait", "--timeout", "0.05", "--interval", "10"], env=ENV
+    )
+    assert result.exit_code == 2
+    assert slept and max(slept) <= 0.05
+
+
+def test_quote_wait_fails_when_the_quote_expires(runner: CliRunner, api: respx.MockRouter) -> None:
+    route = api.get("/v1/projects/p/quote")
+    route.side_effect = [
+        httpx.Response(200, json=quote_json("p", status="pricing", lines=[], fees=[])),
+        httpx.Response(200, json=quote_json("p", status="expired")),
+    ]
+    result = runner.invoke(app, ["quote", "p", "--wait", "--interval", "0"], env=ENV)
+    assert result.exit_code == 1
+    assert json.loads(result.stdout)["status"] == "expired"
+    assert "expired before it was ready" in result.stderr
+
+
+def test_quote_without_wait_prints_an_expired_quote(
+    runner: CliRunner, api: respx.MockRouter
+) -> None:
+    api.get("/v1/projects/p/quote").respond(200, json=quote_json("p", status="expired"))
+    result = runner.invoke(app, ["quote", "p"], env=ENV)
+    assert result.exit_code == 0
+    assert json.loads(result.output)["status"] == "expired"
+
+
+def test_quote_wait_accepts_an_infinite_timeout(runner: CliRunner, api: respx.MockRouter) -> None:
+    route = api.get("/v1/projects/p/quote")
+    route.side_effect = [
+        httpx.Response(200, json=quote_json("p", status="pricing", lines=[], fees=[])),
+        httpx.Response(200, json=quote_json("p", version=2)),
+    ]
+    result = runner.invoke(
+        app, ["quote", "p", "--wait", "--timeout", "inf", "--interval", "0"], env=ENV
+    )
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["version"] == 2
