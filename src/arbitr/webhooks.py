@@ -7,15 +7,29 @@ import hmac
 import json
 import math
 import time
-from typing import Any
+from typing import Any, Literal
 
+from pydantic import BaseModel, ConfigDict, ValidationError
+
+from arbitr._datetime import UtcDatetime
 from arbitr.errors import ArbitrClientError
 
+# Informational: a delivery may carry a name not listed here (a newer API
+# release). ``parse_event`` accepts any event name.
 KNOWN_EVENTS = frozenset(
     {
+        "project.created",
+        "project.awaiting_payment",
+        "project.hold_ready",
+        "project.confirmed",
+        "project.hold_expired",
         "project.completed",
-        "project.published",
         "project.failed",
+        "project.cancelled",
+        "project.published",
+        "project.review_requested",
+        "project.review_awaiting_payment",
+        "project.review_completed",
         "webhook.test",
     }
 )
@@ -75,6 +89,20 @@ def verify_signature(
         raise WebhookVerificationError("signature mismatch")
 
 
+class WebhookEvent(BaseModel):
+    """The envelope of a delivered webhook."""
+
+    model_config = ConfigDict(frozen=True, extra="allow")
+
+    id: str
+    # Null for ``webhook.test`` and for redeliveries of rows that predate it.
+    event_id: str | None = None
+    event: str
+    created_at: UtcDatetime
+    mode: Literal["live", "test"]
+    data: dict[str, Any]
+
+
 def parse_event(body: bytes | str) -> dict[str, Any]:
     """Parse the event envelope: ``{"event": <type>, ...payload}``."""
     try:
@@ -84,3 +112,15 @@ def parse_event(body: bytes | str) -> dict[str, Any]:
     if not isinstance(event, dict) or "event" not in event:
         raise WebhookVerificationError("body is not an Arbitr event envelope")
     return event
+
+
+def parse_webhook_event(body: bytes | str) -> WebhookEvent:
+    """Parse a delivered body into a typed ``WebhookEvent``.
+
+    Does not verify the signature; call ``verify_signature`` first.
+    """
+    raw = parse_event(body)
+    try:
+        return WebhookEvent.model_validate(raw)
+    except ValidationError as exc:
+        raise WebhookVerificationError("body is not an Arbitr event envelope") from exc

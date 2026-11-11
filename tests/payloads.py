@@ -5,6 +5,17 @@ from __future__ import annotations
 from typing import Any
 
 
+def balance_json(balance: float = 1, **over: Any) -> dict[str, Any]:
+    """A CreditBalanceResponse-shaped dict. Extra keys override defaults."""
+    body: dict[str, Any] = {
+        "balance": balance,
+        "intelligence_credits": balance,
+        "trust_credits": 0,
+    }
+    body.update(over)
+    return body
+
+
 def project_json(
     project_id: str = "p",
     *,
@@ -213,3 +224,66 @@ def usage_list_json(*, number: int = 1, has_more: bool = False) -> dict[str, Any
         ],
         "page": {"number": number, "has_more": has_more, "limit": 50},
     }
+
+
+def quote_json(project_id: str = "p", *, version: int = 1, **over: Any) -> dict[str, Any]:
+    """A QuoteResponse-shaped dict. Extra keys override defaults."""
+    body: dict[str, Any] = {
+        "project_id": project_id,
+        "status": "ready",
+        "version": version,
+        "lines": [
+            {
+                "file_id": "f-1",
+                "file_name": "a.docx",
+                "target_language_code": "fr-fr",
+                "stage": "AI_TRANSLATION",
+                "unit": "character",
+                "quantity": 1200,
+                "intelligence_credits": 3.5,
+            }
+        ],
+        "fees": [
+            {
+                "file_id": "f-1",
+                "file_name": "a.pdf",
+                "kind": "pdf_conversion",
+                "unit": "page",
+                "quantity": 2,
+                "intelligence_credits": 1.0,
+            }
+        ],
+        "intelligence_credits": 4.5,
+        "expires_at": "2026-10-22T10:00:00Z",
+    }
+    body.update(over)
+    return body
+
+
+def webhook_json(webhook_id: str = "w-1", **over: Any) -> dict[str, Any]:
+    """A WebhookResponse-shaped dict. Extra keys override defaults."""
+    body: dict[str, Any] = {
+        "id": webhook_id,
+        "url": "https://example.com/hooks",
+        "event_types": ["project.completed"],
+        "mode": "live",
+        "status": "active",
+        "consecutive_failures": 0,
+        "created_at": "2026-11-01T00:00:00Z",
+    }
+    body.update(over)
+    return body
+
+
+def webhook_delivery_json(delivery_id: str = "d-1", **over: Any) -> dict[str, Any]:
+    """A WebhookDelivery-shaped dict, built from the published required fields."""
+    body: dict[str, Any] = {
+        "id": delivery_id,
+        "event_id": "e-1",
+        "event": "project.completed",
+        "status": "failed",
+        "attempts": 1,
+        "created_at": "2026-11-01T00:00:00Z",
+    }
+    body.update(over)
+    return body

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import mimetypes
 import os
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, BinaryIO
@@ -39,7 +39,7 @@ def require_submit_files(files: list[FileInput]) -> None:
 @contextmanager
 def open_upload_parts(
     files: list[FileInput], extension_check: ExtensionCheck
-) -> Iterator[list[tuple[str, tuple[str, Any, str]]]]:
+) -> Generator[list[tuple[str, tuple[str, Any, str]]]]:
     """Yield httpx2 multipart ``file`` parts; close any paths this helper opened."""
     opened: list[BinaryIO] = []
     try:

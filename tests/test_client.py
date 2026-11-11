@@ -34,6 +34,9 @@ from arbitr import (
     MissingApiKeyError,
     NotFoundError,
     ProjectWaitTimeoutError,
+    QuotePair,
+    QuoteStage,
+    QuoteStatus,
     RateLimitError,
     Requester,
     RequesterSource,
@@ -47,6 +50,7 @@ from arbitr import (
 )
 from payloads import (
     agent_finding_json,
+    balance_json,
     chain_of_custody_json,
     connection_json,
     finding_list_json,
@@ -54,9 +58,12 @@ from payloads import (
     human_review_json,
     project_json,
     project_list_json,
+    quote_json,
     text_translate_json,
     usage_list_json,
+    webhook_json,
 )
+from webhook_cases import WEBHOOK_CALL_IDS, WEBHOOK_CALLS
 
 
 def make_client(handler: Any) -> ArbitrClient:
@@ -72,7 +79,7 @@ def test_auth_headers_sent() -> None:
         assert request.headers["X-API-Key"] == "py_test_abc123"
         assert request.headers["X-API-Version"] == "1"
         assert request.headers["User-Agent"].startswith("arbitr-python/")
-        return httpx2.Response(200, json={"balance": 100, "currency": "credits"})
+        return httpx2.Response(200, json=balance_json(100))
 
     client = make_client(handler)
     assert client.credits.balance().balance == 100
@@ -943,6 +950,11 @@ def test_path_ids_are_percent_encoded(tmp_path: Any) -> None:
         lambda: client.projects.deliverable("p", "d?x=1"),
         lambda: client.projects.download_deliverable("p", "../d", tmp_path / "out"),
         lambda: client.projects.resume("."),
+        lambda: client.projects.quote("a/b"),
+        lambda: client.projects.adjust_quote("../x", quote_version=1, remove=[]),
+        lambda: client.projects.confirm(".."),
+        lambda: client.webhooks.get(".."),
+        lambda: client.webhooks.redeliver("../x", "a/b"),
     ]
     for call in calls:
         with pytest.raises(NotFoundError):
@@ -954,6 +966,11 @@ def test_path_ids_are_percent_encoded(tmp_path: Any) -> None:
         b"/v1/projects/p/deliverables/d%3Fx%3D1",
         b"/v1/projects/p/deliverables/..%2Fd",
         b"/v1/projects/%2E/resumptions",
+        b"/v1/projects/a%2Fb/quote",
+        b"/v1/projects/..%2Fx/quote/adjustments",
+        b"/v1/projects/%2E%2E/confirmations",
+        b"/v1/webhooks/%2E%2E",
+        b"/v1/webhooks/..%2Fx/deliveries/a%2Fb/redeliver",
     ]
 
 
@@ -1114,7 +1131,7 @@ def test_user_agent_suffix() -> None:
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         seen.append(request.headers["User-Agent"])
-        return httpx2.Response(200, json={"balance": 1})
+        return httpx2.Response(200, json=balance_json(1))
 
     client = ArbitrClient(
         api_key="py_test_abc123",
@@ -1124,3 +1141,159 @@ def test_user_agent_suffix() -> None:
     )
     client.credits.balance()
     assert seen == [f"arbitr-python/{arbitr.__version__} slack-service"]
+
+
+REQUESTER = Requester(tenant_id="E1", external_id="U1", email="ann@example.com")
+REQUESTER_JSON = {"tenant_id": "E1", "external_id": "U1", "email": "ann@example.com"}
+
+
+def test_submit_sends_hold_fields_and_requester(tmp_path: Any) -> None:
+    doc = tmp_path / "hello.txt"
+    doc.write_text("hello")
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        captured["body"] = request.content
+        return httpx2.Response(201, json=project_json("p", status="extracting"))
+
+    make_client(handler).projects.submit(
+        files=[doc],
+        name="demo",
+        target_language_codes=["fr-fr"],
+        requester=REQUESTER,
+        hold_for_quote=True,
+        archive_on_completion=True,
+        notes="rush",
+        reference="JOB-42",
+    )
+    body = captured["body"]
+    assert b'name="reference"\r\n\r\nJOB-42' in body
+    assert b'name="hold_for_quote"\r\n\r\ntrue' in body
+    assert b'name="archive_on_completion"\r\n\r\ntrue' in body
+    assert b'name="notes"\r\n\r\nrush' in body
+    assert b'name="requester"' in body
+    assert json.dumps(REQUESTER_JSON).encode() in body
+
+
+def test_submit_omits_hold_fields_by_default(tmp_path: Any) -> None:
+    doc = tmp_path / "hello.txt"
+    doc.write_text("hello")
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        captured["body"] = request.content
+        return httpx2.Response(201, json=project_json("p"))
+
+    make_client(handler).projects.submit(files=[doc], name="d", target_language_codes=["fr-fr"])
+    for field in ("hold_for_quote", "archive_on_completion", "notes", "requester", "reference"):
+        assert f'name="{field}"'.encode() not in captured["body"]
+
+
+def test_quote_parses_response() -> None:
+    seen: list[tuple[str, str]] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        seen.append((request.method, request.url.path))
+        return httpx2.Response(200, json=quote_json("p", version=2))
+
+    quote = make_client(handler).projects.quote("p")
+    assert seen == [("GET", "/v1/projects/p/quote")]
+    assert quote.version == 2
+    assert quote.status == QuoteStatus.ready
+    assert quote.lines[0].target_language_code == "fr-fr"
+    assert quote.lines[0].stage == QuoteStage.AI_TRANSLATION
+    assert quote.fees[0].kind == "pdf_conversion"
+
+
+def test_adjust_quote_body() -> None:
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        seen["path"] = request.url.path
+        seen["method"] = request.method
+        seen["body"] = json.loads(request.content)
+        seen["idem"] = request.headers.get("Idempotency-Key")
+        return httpx2.Response(201, json=quote_json("p", version=2))
+
+    quote = make_client(handler).projects.adjust_quote(
+        "p", quote_version=1, remove=[QuotePair(file_id="f-1", target_language_code="FR-fr")]
+    )
+    assert seen["method"] == "POST"
+    assert seen["path"] == "/v1/projects/p/quote/adjustments"
+    assert seen["body"] == {
+        "quote_version": 1,
+        "remove": [{"file_id": "f-1", "target_language_code": "FR-fr"}],
+    }
+    assert seen["idem"] is None
+    assert quote.version == 2
+
+
+def test_confirm_body_omits_none() -> None:
+    bodies: list[Any] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        assert request.url.path == "/v1/projects/p/confirmations"
+        bodies.append(json.loads(request.content) if request.content else {})
+        return httpx2.Response(201, json=quote_json("p", status="confirmed"))
+
+    client = make_client(handler)
+    client.projects.confirm("p")
+    confirmed = client.projects.confirm("p", quote_version=3, requester=REQUESTER)
+    assert bodies[0] == {}
+    assert bodies[1] == {"quote_version": 3, "requester": REQUESTER_JSON}
+    assert confirmed.status == QuoteStatus.confirmed
+
+
+def test_wait_on_held_project_mentions_confirm() -> None:
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=project_json("p", status="agent_selection"))
+
+    with pytest.raises(ActionRequiredError, match=r"projects\.confirm"):
+        make_client(handler).projects.wait("p", timeout=10, poll_interval=0.01)
+
+
+@pytest.mark.parametrize(
+    ("call", "method", "path", "body", "query", "status", "response", "parsed"),
+    WEBHOOK_CALLS,
+    ids=WEBHOOK_CALL_IDS,
+)
+def test_webhook_methods(
+    call: Any,
+    method: str,
+    path: str,
+    body: Any,
+    query: dict[str, str],
+    status: int,
+    response: Any,
+    parsed: type,
+) -> None:
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        seen["method"] = request.method
+        seen["path"] = request.url.path
+        seen["query"] = dict(request.url.params)
+        seen["body"] = json.loads(request.content) if request.content else None
+        return httpx2.Response(status, json=response)
+
+    result = call(make_client(handler))
+    assert (seen["method"], seen["path"], seen["query"], seen["body"]) == (
+        method,
+        path,
+        query,
+        body,
+    )
+    assert isinstance(result, parsed)
+
+
+def test_webhook_update_sends_only_what_was_given() -> None:
+    bodies: list[Any] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        bodies.append(json.loads(request.content))
+        return httpx2.Response(200, json=webhook_json())
+
+    client = make_client(handler)
+    client.webhooks.update("w-1", event_types=["project.failed"])
+    client.webhooks.update("w-1", description="")
+    assert bodies == [{"event_types": ["project.failed"]}, {"description": ""}]

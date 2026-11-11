@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict
 
 from arbitr._constants import DEFAULT_WORKFLOW
 from arbitr.errors import ClientInputError, FindingsKeysetError
+from arbitr.generated.models import QuotePair, Requester
 
 
 class ProjectResumptionResponse(BaseModel):
@@ -52,6 +53,11 @@ def project_submit_form(
     source_language_code: str,
     workflow: list[str] | None,
     due_date: str | None,
+    requester: Requester | None = None,
+    hold_for_quote: bool = False,
+    archive_on_completion: bool = False,
+    notes: str | None = None,
+    reference: str | None = None,
 ) -> dict[str, str]:
     """Multipart form fields for POST /v1/projects (files are attached separately)."""
     data = {
@@ -64,7 +70,43 @@ def project_submit_form(
     }
     if due_date is not None:
         data["due_date"] = due_date
+    if requester is not None:
+        data["requester"] = requester_json(requester)
+    if hold_for_quote:
+        data["hold_for_quote"] = "true"
+    if archive_on_completion:
+        data["archive_on_completion"] = "true"
+    if notes is not None:
+        data["notes"] = notes
+    if reference is not None:
+        data["reference"] = reference
     return data
+
+
+def requester_json(requester: Requester) -> str:
+    """JSON text of a requester, for the create form field."""
+    return json.dumps(requester.model_dump(mode="json", exclude_none=True))
+
+
+def quote_adjustment_body(*, quote_version: int, remove: list[QuotePair]) -> dict[str, Any]:
+    """JSON body for POST /v1/projects/{id}/quote/adjustments.
+
+    Pair codes go out as given; the server matches them against the quote.
+    """
+    return {
+        "quote_version": quote_version,
+        "remove": [pair.model_dump(mode="json", exclude_none=True) for pair in remove],
+    }
+
+
+def confirmation_body(*, quote_version: int | None, requester: Requester | None) -> dict[str, Any]:
+    """JSON body for POST /v1/projects/{id}/confirmations; unset fields are left out."""
+    body: dict[str, Any] = {}
+    if quote_version is not None:
+        body["quote_version"] = quote_version
+    if requester is not None:
+        body["requester"] = requester.model_dump(mode="json", exclude_none=True)
+    return body
 
 
 def project_list_params(

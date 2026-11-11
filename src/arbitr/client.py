@@ -44,15 +44,25 @@ from arbitr._locales import filter_language_list, language_bcp47_set, resolve_lo
 from arbitr._parse import decode_json_body, parse_response
 from arbitr._projects import (
     ProjectResumptionResponse,
+    confirmation_body,
     findings_list_params,
     idempotency_headers,
     next_findings_after,
     project_list_params,
     project_submit_form,
+    quote_adjustment_body,
 )
 from arbitr._text import text_translate_body, usage_list_params
 from arbitr._version import __version__ as _version
 from arbitr._wait import decide_project_wait, parse_on_action_required
+from arbitr._webhook_requests import (
+    WEBHOOKS_PATH,
+    WebhookTestBody,
+    webhook_create_body,
+    webhook_deliveries_params,
+    webhook_path,
+    webhook_update_body,
+)
 from arbitr.generated.models import (
     AgentFinding,
     ChainOfCustodyResponse,
@@ -69,6 +79,8 @@ from arbitr.generated.models import (
     ProjectDeliverableResponse,
     ProjectListResponse,
     ProjectResponse,
+    QuotePair,
+    QuoteResponse,
     Requester,
     TextFormat,
     TextToTranslate,
@@ -76,6 +88,13 @@ from arbitr.generated.models import (
     TextUsageType,
     UnknownFinding,
     UsageListResponse,
+    WebhookCreateResponse,
+    WebhookDelivery,
+    WebhookDeliveryListResponse,
+    WebhookDeliveryStatus,
+    WebhookListResponse,
+    WebhookResponse,
+    WebhookStatus,
 )
 
 __all__ = ["ArbitrClient", "new_idempotency_key"]
@@ -127,6 +146,7 @@ class ArbitrClient:
         self.credits = CreditsAPI(self)
         self.text = TextAPI(self)
         self.usage = UsageAPI(self)
+        self.webhooks = WebhooksAPI(self)
 
     @property
     def api_key(self) -> str:
@@ -242,11 +262,25 @@ class ProjectsAPI:
         source_language_code: str = DEFAULT_SOURCE_LANGUAGE,
         workflow: list[str] | None = None,
         due_date: str | None = None,
+        requester: Requester | None = None,
+        hold_for_quote: bool = False,
+        archive_on_completion: bool = False,
+        notes: str | None = None,
+        reference: str | None = None,
         idempotency_key: str | None = None,
         extension_check: ExtensionCheck = "allowlist",
         timeout: float | httpx2.Timeout | None = None,
     ) -> ProjectResponse:
-        """Create a translation project (POST /v1/projects)."""
+        """Create a translation project (POST /v1/projects).
+
+        ``requester``: your ids (tenant, external) for the person the work is for.
+        ``hold_for_quote``: hold the project for a quote until you confirm it.
+        ``archive_on_completion``: archive the project once it completes.
+        ``notes``: free-text note stored with the project (255 characters at most).
+        ``reference``: your own id for the project (1-128 characters). Creating
+        again with a reference already in use returns that project and creates
+        nothing; test keys don't deduplicate.
+        """
         require_submit_files(files)
         extension_check = parse_extension_check(extension_check)
         ensure_upload_within_limit(files)
@@ -260,6 +294,11 @@ class ProjectsAPI:
                     source_language_code=source_language_code,
                     workflow=workflow,
                     due_date=due_date,
+                    requester=requester,
+                    hold_for_quote=hold_for_quote,
+                    archive_on_completion=archive_on_completion,
+                    notes=notes,
+                    reference=reference,
                 ),
                 files=parts,
                 headers=idempotency_headers(idempotency_key),
@@ -531,6 +570,69 @@ class ProjectsAPI:
             operation="createProjectResumption",
         )
 
+    def quote(
+        self, project_id: str, *, timeout: float | httpx2.Timeout | None = None
+    ) -> QuoteResponse:
+        """Fetch the price quote for a held project (GET /v1/projects/{id}/quote)."""
+        resp = self._c.request(
+            "GET",
+            f"/v1/projects/{path_segment(project_id)}/quote",
+            timeout=request_timeout(timeout),
+        )
+        return parse_response(
+            QuoteResponse,
+            decode_json_body(resp, operation="getProjectQuote"),
+            operation="getProjectQuote",
+        )
+
+    def adjust_quote(
+        self,
+        project_id: str,
+        *,
+        quote_version: int,
+        remove: list[QuotePair],
+        timeout: float | httpx2.Timeout | None = None,
+    ) -> QuoteResponse:
+        """Drop file/language pairs from a quote and re-price it.
+
+        Pairs are matched by the server; ``target_language_code`` is sent as given.
+        """
+        resp = self._c.request(
+            "POST",
+            f"/v1/projects/{path_segment(project_id)}/quote/adjustments",
+            json=quote_adjustment_body(quote_version=quote_version, remove=remove),
+            timeout=request_timeout(timeout),
+        )
+        return parse_response(
+            QuoteResponse,
+            decode_json_body(resp, operation="createQuoteAdjustment"),
+            operation="createQuoteAdjustment",
+        )
+
+    def confirm(
+        self,
+        project_id: str,
+        *,
+        quote_version: int | None = None,
+        requester: Requester | None = None,
+        timeout: float | httpx2.Timeout | None = None,
+    ) -> QuoteResponse:
+        """Confirm a held project's quote so the work starts.
+
+        Pass ``quote_version`` to refuse a quote that changed since you reviewed it.
+        """
+        resp = self._c.request(
+            "POST",
+            f"/v1/projects/{path_segment(project_id)}/confirmations",
+            json=confirmation_body(quote_version=quote_version, requester=requester),
+            timeout=request_timeout(timeout),
+        )
+        return parse_response(
+            QuoteResponse,
+            decode_json_body(resp, operation="createProjectConfirmation"),
+            operation="createProjectConfirmation",
+        )
+
     def resume_human_review(
         self, project_id: str, *, timeout: float | httpx2.Timeout | None = None
     ) -> HumanReviewResponse:
@@ -689,4 +791,160 @@ class UsageAPI:
                 timeout=request_timeout(timeout),
             ),
             operation="listUsage",
+        )
+
+
+class WebhooksAPI:
+    """Beta. Webhooks that send project events to your HTTPS endpoint.
+
+    Every call needs a key with the ``webhooks:manage`` scope, which only an
+    organisation admin or owner can grant.
+    """
+
+    def __init__(self, client: ArbitrClient) -> None:
+        self._c = client
+
+    def list(self, *, timeout: float | httpx2.Timeout | None = None) -> WebhookListResponse:
+        """Every webhook in the organisation, live and test (GET /v1/webhooks)."""
+        return parse_response(
+            WebhookListResponse,
+            self._c.get_json(WEBHOOKS_PATH, timeout=request_timeout(timeout)),
+            operation="listWebhooks",
+        )
+
+    def create(
+        self,
+        url: str,
+        event_types: Sequence[str],
+        *,
+        description: str | None = None,
+        timeout: float | httpx2.Timeout | None = None,
+    ) -> WebhookCreateResponse:
+        """Register a public HTTPS ``url`` for ``event_types`` (POST /v1/webhooks).
+
+        The response's ``plaintext_secret`` verifies delivery signatures and is
+        returned only here; store it before you discard the response.
+        """
+        resp = self._c.request(
+            "POST",
+            WEBHOOKS_PATH,
+            json=webhook_create_body(url=url, event_types=event_types, description=description),
+            timeout=request_timeout(timeout),
+        )
+        return parse_response(
+            WebhookCreateResponse,
+            decode_json_body(resp, operation="createWebhook"),
+            operation="createWebhook",
+        )
+
+    def get(
+        self, webhook_id: str, *, timeout: float | httpx2.Timeout | None = None
+    ) -> WebhookResponse:
+        """One webhook (GET /v1/webhooks/{id})."""
+        return parse_response(
+            WebhookResponse,
+            self._c.get_json(webhook_path(webhook_id), timeout=request_timeout(timeout)),
+            operation="getWebhook",
+        )
+
+    def update(
+        self,
+        webhook_id: str,
+        *,
+        event_types: Sequence[str] | None = None,
+        status: WebhookStatus | str | None = None,
+        description: str | None = None,
+        timeout: float | httpx2.Timeout | None = None,
+    ) -> WebhookResponse:
+        """Change a webhook's events, description or status (PATCH /v1/webhooks/{id}).
+
+        Only the arguments you pass are sent. ``status="active"`` turns a
+        disabled webhook back on and resets its failure count. The URL can't
+        be changed; create a new webhook instead.
+        """
+        resp = self._c.request(
+            "PATCH",
+            webhook_path(webhook_id),
+            json=webhook_update_body(
+                event_types=event_types, status=status, description=description
+            ),
+            timeout=request_timeout(timeout),
+        )
+        return parse_response(
+            WebhookResponse,
+            decode_json_body(resp, operation="updateWebhook"),
+            operation="updateWebhook",
+        )
+
+    def delete(
+        self, webhook_id: str, *, timeout: float | httpx2.Timeout | None = None
+    ) -> WebhookResponse:
+        """Turn a webhook off (DELETE /v1/webhooks/{id}).
+
+        It is not removed: it stays listed as ``disabled`` and ``update`` with
+        ``status="active"`` turns it back on.
+        """
+        resp = self._c.request("DELETE", webhook_path(webhook_id), timeout=request_timeout(timeout))
+        return parse_response(
+            WebhookResponse,
+            decode_json_body(resp, operation="deleteWebhook"),
+            operation="deleteWebhook",
+        )
+
+    def test(
+        self, webhook_id: str, *, timeout: float | httpx2.Timeout | None = None
+    ) -> dict[str, Any]:
+        """Send a ``webhook.test`` event to the webhook (POST /v1/webhooks/{id}/test)."""
+        resp = self._c.request(
+            "POST", webhook_path(webhook_id, "test"), timeout=request_timeout(timeout)
+        )
+        return parse_response(
+            WebhookTestBody,
+            decode_json_body(resp, operation="testWebhook"),
+            operation="testWebhook",
+        ).root
+
+    def deliveries(
+        self,
+        webhook_id: str,
+        *,
+        status: WebhookDeliveryStatus | str | None = None,
+        event: str | None = None,
+        after: str | None = None,
+        limit: int | None = None,
+        timeout: float | httpx2.Timeout | None = None,
+    ) -> WebhookDeliveryListResponse:
+        """One page of a webhook's deliveries, newest first (GET /v1/webhooks/{id}/deliveries).
+
+        Pass the previous page's ``page.after`` as ``after`` for the next page.
+        """
+        return parse_response(
+            WebhookDeliveryListResponse,
+            self._c.get_json(
+                webhook_path(webhook_id, "deliveries"),
+                params=webhook_deliveries_params(
+                    status=status, event=event, after=after, limit=limit
+                ),
+                timeout=request_timeout(timeout),
+            ),
+            operation="listWebhookDeliveries",
+        )
+
+    def redeliver(
+        self,
+        webhook_id: str,
+        delivery_id: str,
+        *,
+        timeout: float | httpx2.Timeout | None = None,
+    ) -> WebhookDelivery:
+        """Queue a delivery to be sent again (POST .../deliveries/{id}/redeliver)."""
+        resp = self._c.request(
+            "POST",
+            webhook_path(webhook_id, "deliveries", path_segment(delivery_id), "redeliver"),
+            timeout=request_timeout(timeout),
+        )
+        return parse_response(
+            WebhookDelivery,
+            decode_json_body(resp, operation="redeliverWebhookDelivery"),
+            operation="redeliverWebhookDelivery",
         )

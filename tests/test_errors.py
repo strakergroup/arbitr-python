@@ -9,6 +9,7 @@ import pytest
 
 from arbitr import (
     ActionRequiredError,
+    AlreadyConfirmedError,
     AmbiguousLocaleCodesError,
     ApiMovedError,
     ArbitrBaseError,
@@ -24,11 +25,15 @@ from arbitr import (
     DisallowedFileExtensionError,
     FindingsKeysetError,
     GoneError,
+    HoldExpiredError,
     MissingApiKeyError,
     NotFoundError,
+    NotOnHoldError,
     OpenAPIDocumentError,
     PaymentRequiredError,
     ProjectWaitTimeoutError,
+    QuoteChangedError,
+    QuoteNotReadyError,
     RateLimitError,
     RequestTimeoutError,
     ResponseDecodeError,
@@ -42,6 +47,11 @@ from arbitr import (
 from arbitr.errors import from_response
 
 EVERY_ERROR = [
+    AlreadyConfirmedError,
+    HoldExpiredError,
+    NotOnHoldError,
+    QuoteChangedError,
+    QuoteNotReadyError,
     ActionRequiredError,
     AmbiguousLocaleCodesError,
     ApiMovedError,
@@ -350,3 +360,39 @@ def test_redirect_without_a_request_is_a_plain_error() -> None:
     resp = httpx2.Response(301, headers={"Location": "https://api.arbitr.ai/v1/me"})
     err = from_response(resp)
     assert type(err) is ArbitrError
+
+
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
+        ("not_on_hold", NotOnHoldError),
+        ("quote_not_ready", QuoteNotReadyError),
+        ("quote_changed", QuoteChangedError),
+        ("hold_expired", HoldExpiredError),
+        ("already_confirmed", AlreadyConfirmedError),
+    ],
+)
+def test_conflict_codes_map_to_typed_errors(code: str, expected: type[ConflictError]) -> None:
+    with make_client(error_response(409, code)) as client, pytest.raises(expected) as raised:
+        client.me()
+    assert isinstance(raised.value, ConflictError)
+    assert raised.value.code == code
+    assert raised.value.status_code == 409
+
+
+def test_conflict_code_on_other_status_keeps_status_mapping() -> None:
+    with (
+        make_client(error_response(422, "quote_changed")) as client,
+        pytest.raises(ValidationError) as raised,
+    ):
+        client.me()
+    assert type(raised.value) is ValidationError
+
+
+def test_unknown_conflict_code_stays_plain_conflict() -> None:
+    with (
+        make_client(error_response(409, "something_else")) as client,
+        pytest.raises(ConflictError) as raised,
+    ):
+        client.me()
+    assert type(raised.value) is ConflictError

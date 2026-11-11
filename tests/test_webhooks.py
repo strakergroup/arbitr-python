@@ -4,15 +4,19 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import UTC, datetime
 
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
 from arbitr.webhooks import (
+    KNOWN_EVENTS,
+    WebhookEvent,
     WebhookVerificationError,
     compute_signature,
     parse_event,
+    parse_webhook_event,
     verify_signature,
 )
 
@@ -67,11 +71,82 @@ def test_nan_tolerance_is_rejected() -> None:
         )
 
 
+def _envelope(**over: object) -> bytes:
+    body: dict[str, object] = {
+        "id": "dlv-1",
+        "event_id": "evt-1",
+        "event": "project.hold_ready",
+        "created_at": "2026-10-29T01:02:03Z",
+        "mode": "live",
+        "data": {"project_id": "p-1"},
+    }
+    body.update(over)
+    return json.dumps(body).encode()
+
+
+def test_known_events_matches_exposed_list() -> None:
+    exposed = {
+        "project.created",
+        "project.awaiting_payment",
+        "project.hold_ready",
+        "project.confirmed",
+        "project.hold_expired",
+        "project.completed",
+        "project.failed",
+        "project.cancelled",
+        "project.published",
+        "project.review_requested",
+        "project.review_awaiting_payment",
+        "project.review_completed",
+        "webhook.test",
+    }
+    assert exposed == KNOWN_EVENTS
+
+
 def test_parse_event() -> None:
     event = parse_event(BODY)
     assert event["event"] == "project.completed"
     with pytest.raises(WebhookVerificationError):
         parse_event(json.dumps({"no_event": True}))
+
+
+def test_parse_event_still_returns_plain_dict() -> None:
+    assert type(parse_event(_envelope())) is dict
+
+
+def test_parse_webhook_event_hold_ready() -> None:
+    event = parse_webhook_event(_envelope())
+    assert isinstance(event, WebhookEvent)
+    assert event.event == "project.hold_ready"
+    assert event.event in KNOWN_EVENTS
+    assert event.id == "dlv-1"
+    assert event.event_id == "evt-1"
+    assert event.mode == "live"
+    assert event.created_at == datetime(2026, 10, 29, 1, 2, 3, tzinfo=UTC)
+    assert event.data == {"project_id": "p-1"}
+    with pytest.raises(ValueError):
+        event.event = "other"  # ty: ignore[invalid-assignment] -- frozen; the attempt is the test
+
+
+def test_parse_webhook_event_null_event_id_for_test_ping() -> None:
+    event = parse_webhook_event(_envelope(event="webhook.test", event_id=None, mode="test"))
+    assert event.event_id is None
+    assert event.mode == "test"
+
+
+def test_parse_webhook_event_unknown_event_still_parses() -> None:
+    event = parse_webhook_event(_envelope(event="project.something_new"))
+    assert event.event == "project.something_new"
+    assert event.event not in KNOWN_EVENTS
+
+
+def test_parse_webhook_event_malformed_envelope_is_a_package_error() -> None:
+    with pytest.raises(WebhookVerificationError):
+        parse_webhook_event(json.dumps({"no_event": True}))
+    with pytest.raises(WebhookVerificationError):
+        parse_webhook_event(b"[1, 2]")
+    with pytest.raises(WebhookVerificationError):
+        parse_webhook_event(_envelope(data="not-a-dict"))
 
 
 def test_parse_event_invalid_json_is_a_package_error() -> None:

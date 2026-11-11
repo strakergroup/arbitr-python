@@ -17,9 +17,9 @@ from arbitr import (
     ServerError,
 )
 from arbitr._http import is_retryable_method, retry_delay
-from payloads import project_json
+from payloads import balance_json, project_json
 
-BALANCE: dict[str, Any] = {"balance": 5}
+BALANCE: dict[str, Any] = balance_json(5)
 
 
 def sync_client(handler: Any, **kwargs: Any) -> ArbitrClient:
