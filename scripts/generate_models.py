@@ -50,6 +50,10 @@ MODEL_NAMES = {
     NULLABLE_ENUM_REF.format(schema="UsageRecord", field="unit"): "UsageUnit",
     # Not a collision — `Mode` is just too generic for a name callers import.
     ENUM_REF.format(schema="MeResponse", field="mode"): "ApiKeyMode",
+    ENUM_REF.format(schema="QuoteResponse", field="status"): "QuoteStatus",
+    ENUM_REF.format(schema="QuoteLine", field="stage"): "QuoteStage",
+    ENUM_REF.format(schema="WebhookDelivery", field="status"): "WebhookDeliveryStatus",
+    NULLABLE_ENUM_REF.format(schema="WebhookUpdateRequest", field="status"): "WebhookStatus",
 }
 
 

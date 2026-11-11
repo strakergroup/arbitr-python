@@ -137,6 +137,29 @@ class ConflictError(ArbitrError):
         return raw if isinstance(raw, str) else None
 
 
+class NotOnHoldError(ConflictError):
+    """409 ``not_on_hold`` — the project was not created with ``hold_for_quote``."""
+
+
+class QuoteNotReadyError(ConflictError):
+    """409 ``quote_not_ready`` — pricing is still running; fetch the quote again shortly."""
+
+
+class QuoteChangedError(ConflictError):
+    """409 ``quote_changed`` — the quote moved past the ``quote_version`` you sent.
+
+    Fetch it again with ``projects.quote()``, review it, then retry.
+    """
+
+
+class HoldExpiredError(ConflictError):
+    """409 ``hold_expired`` — the hold lapsed before it was confirmed."""
+
+
+class AlreadyConfirmedError(ConflictError):
+    """409 ``already_confirmed`` — the quote was already confirmed."""
+
+
 class ValidationError(ArbitrError):
     """422 — request failed validation; inspect ``field_errors``."""
 
@@ -292,11 +315,14 @@ class ActionRequiredError(ArbitrClientError):
 
     _GUIDANCE: ClassVar[dict[str, str]] = {
         "agent_selection": (
-            "the project is waiting for a human to confirm the agent selection "
-            "(the 'Start Campaign' button) in the Arbitr UI — the external API "
-            "cannot release this gate. Open the project's /agents page, click "
-            "Start Campaign, then wait again. (New projects skip the gate "
-            'entirely when submitted with workflow=["AI_TRANSLATION"].)'
+            "if the project was created with hold_for_quote, it is waiting for "
+            "you to confirm the quote: review it with projects.quote(), then "
+            "call projects.confirm() and wait again. Otherwise it is waiting "
+            "for a human to confirm the agent selection (the 'Start Campaign' "
+            "button) in the Arbitr UI — the external API cannot release that "
+            "gate. Open the project's /agents page, click Start Campaign, then "
+            "wait again. (New projects skip the gate entirely when submitted "
+            'with workflow=["AI_TRANSLATION"].)'
         ),
         "awaiting_payment": (
             "insufficient credits — top up in the Arbitr UI, then call "
@@ -329,6 +355,14 @@ _STATUS_MAP: dict[int, type[ArbitrError]] = {
     410: GoneError,
     422: ValidationError,
     429: RateLimitError,
+}
+
+_CONFLICT_CODE_MAP: dict[str, type[ConflictError]] = {
+    "not_on_hold": NotOnHoldError,
+    "quote_not_ready": QuoteNotReadyError,
+    "quote_changed": QuoteChangedError,
+    "hold_expired": HoldExpiredError,
+    "already_confirmed": AlreadyConfirmedError,
 }
 
 _ENVELOPE_META_KEYS = frozenset({"code", "message", "request_id", "field_errors"})
@@ -390,6 +424,8 @@ def from_response(resp: httpx2.Response) -> ArbitrError:
             retry_after = 1.0
 
     cls = _STATUS_MAP.get(resp.status_code)
+    if resp.status_code == 409:
+        cls = _CONFLICT_CODE_MAP.get(str(code), cls)
     if cls is None:
         cls = ServerError if resp.status_code >= 500 else ArbitrError
     return cls(

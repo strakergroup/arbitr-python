@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import math
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,7 +27,7 @@ from arbitr._constants import API_KEYS_URL
 from arbitr._credentials import load_host_settings, resolve_cli_max_retries
 from arbitr._http import project_ui_url
 from arbitr._version import __version__
-from arbitr.generated.models import FindingSeverity, FindingStatus
+from arbitr.generated.models import FindingSeverity, FindingStatus, QuotePair, QuoteResponse
 
 CLI_HELP = f"""arbitr — CLI for the Arbitr External API.
 
@@ -164,7 +166,13 @@ def execute(ctx: typer.Context, operation: Callable[[ArbitrClient], Any]) -> Non
         typer.echo(f"action required: {exc}", err=True)
         if exc.status == "agent_selection":
             hint = exc.ui_url or f"see: arbitr link {exc.project_id}"
-            typer.echo(f"hint: release the gate in the UI (Start Campaign): {hint}", err=True)
+            typer.echo(
+                "hint: if the project was created with --hold-for-quote, confirm its quote "
+                f"(arbitr quote {exc.project_id}, then arbitr confirm {exc.project_id}); "
+                "otherwise release the gate in "
+                f"the UI (Start Campaign): {hint}",
+                err=True,
+            )
         elif exc.status == "awaiting_payment":
             typer.echo(f"hint: after topping up: arbitr resume {exc.project_id}", err=True)
         raise typer.Exit(3) from exc
@@ -190,8 +198,31 @@ def execute(ctx: typer.Context, operation: Callable[[ArbitrClient], Any]) -> Non
 
 
 ProjectIdArg = Annotated[str, typer.Argument(help="project id (UUID)")]
-TimeoutOpt = Annotated[float, typer.Option("--timeout", help="seconds (default 900)")]
-IntervalOpt = Annotated[float, typer.Option("--interval", help="poll seconds (default 5)")]
+
+
+def _timeout_seconds(value: float) -> float:
+    """A wait timeout: 0 or more, ``inf`` to wait forever; nan never times out, so it's refused."""
+    if math.isnan(value) or value < 0:
+        raise typer.BadParameter("must be a number of seconds, 0 or more (inf waits forever)")
+    return value
+
+
+def _interval_seconds(value: float) -> float:
+    """A poll interval ``time.sleep`` can take: finite, 0 or more."""
+    if not math.isfinite(value) or value < 0:
+        raise typer.BadParameter("must be a finite number of seconds, 0 or more")
+    return value
+
+
+TimeoutOpt = Annotated[
+    float,
+    typer.Option(
+        "--timeout", help="seconds (default 900; inf waits forever)", callback=_timeout_seconds
+    ),
+]
+IntervalOpt = Annotated[
+    float, typer.Option("--interval", help="poll seconds (default 5)", callback=_interval_seconds)
+]
 WaitThroughGateOpt = Annotated[
     bool,
     typer.Option(
@@ -342,6 +373,20 @@ def submit(
     idempotency_key: Annotated[
         str | None, typer.Option("--idempotency-key", help="safe-retry key")
     ] = None,
+    hold_for_quote: Annotated[
+        bool,
+        typer.Option(
+            "--hold-for-quote",
+            help="hold the project for a price quote; nothing runs until `arbitr confirm`",
+        ),
+    ] = False,
+    reference: Annotated[
+        str | None,
+        typer.Option(
+            "--reference",
+            help="your own id for the project; reusing one returns that project instead",
+        ),
+    ] = None,
     resolve_locales: Annotated[
         bool,
         typer.Option(
@@ -360,6 +405,11 @@ def submit(
     """Create a translation project from local files."""
 
     def op(client: ArbitrClient) -> Any:
+        if hold_for_quote and wait_for:
+            raise ClientInputError(
+                "--hold-for-quote and --wait can't be combined: a held project waits for "
+                "`arbitr quote`, then `arbitr confirm`"
+            )
         targets = split_csv(locales)
         if resolve_locales:
             targets = client.languages.resolve(targets)
@@ -370,6 +420,8 @@ def submit(
             source_language_code=source,
             workflow=split_csv(workflow),
             due_date=due_date,
+            hold_for_quote=hold_for_quote,
+            reference=reference,
             idempotency_key=idempotency_key,
         )
         payload = _json_ready(project)
@@ -511,6 +563,90 @@ def resume(
         return client.projects.resume(project_id)
 
     execute(ctx, op)
+
+
+QuoteVersionOpt = Annotated[
+    int,
+    typer.Option("--quote-version", help="the quote `version` you reviewed"),
+]
+
+
+def parse_quote_pair(value: str) -> QuotePair:
+    """``FILE_ID:LANGUAGE`` from ``--remove`` as a quote pair."""
+    file_id, sep, language = value.partition(":")
+    if not (sep and file_id and language):
+        raise ClientInputError(f"--remove takes FILE_ID:LANGUAGE, not {value!r}")
+    return QuotePair(file_id=file_id, target_language_code=language)
+
+
+@app.command()
+def quote(
+    ctx: typer.Context,
+    project_id: ProjectIdArg,
+    wait_for: Annotated[
+        bool, typer.Option("--wait", help="poll while the quote is still `pricing`")
+    ] = False,
+    timeout: TimeoutOpt = 900.0,
+    interval: IntervalOpt = 5.0,
+) -> None:
+    """Get the price quote for a project created with --hold-for-quote.
+
+    With --wait, exits 1 if the quote expires instead of becoming ready.
+    """
+
+    def op(client: ArbitrClient) -> QuoteResponse:
+        deadline = time.monotonic() + timeout
+        current = client.projects.quote(project_id)
+        while wait_for and current.status == "pricing":
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ProjectWaitTimeoutError(project_id, str(current.status), timeout)
+            time.sleep(min(interval, remaining))
+            current = client.projects.quote(project_id)
+        if wait_for and current.status == "expired":
+            print_json(current)
+            typer.echo(f"error: the quote for {project_id} expired before it was ready", err=True)
+            raise typer.Exit(1)
+        return current
+
+    execute(ctx, op)
+
+
+@app.command()
+def adjust(
+    ctx: typer.Context,
+    project_id: ProjectIdArg,
+    quote_version: QuoteVersionOpt,
+    remove: Annotated[
+        list[str],
+        typer.Option("--remove", help="FILE_ID:LANGUAGE to drop from the quote; repeat for more"),
+    ],
+) -> None:
+    """Drop files or languages from a held project's quote and get the new price."""
+    execute(
+        ctx,
+        lambda client: client.projects.adjust_quote(
+            project_id,
+            quote_version=quote_version,
+            remove=[parse_quote_pair(value) for value in remove],
+        ),
+    )
+
+
+@app.command()
+def confirm(
+    ctx: typer.Context,
+    project_id: ProjectIdArg,
+    quote_version: Annotated[
+        int | None,
+        typer.Option(
+            "--quote-version",
+            help="refuse to confirm if the quote changed since you reviewed this version",
+        ),
+    ] = None,
+) -> None:
+    """Confirm a held project's quote so the work starts. This spends credits."""
+    execute(ctx, lambda client: client.projects.confirm(project_id, quote_version=quote_version))
 
 
 def entrypoint() -> None:

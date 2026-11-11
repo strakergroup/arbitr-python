@@ -27,12 +27,23 @@ OPERATION_METHODS: dict[str, str] = {
     "listProjectFindings": "projects.findings",
     "getProjectChainOfCustody": "projects.chain_of_custody",
     "createProjectResumption": "projects.resume",
+    "getProjectQuote": "projects.quote",
+    "createQuoteAdjustment": "projects.adjust_quote",
+    "createProjectConfirmation": "projects.confirm",
     "createReviewResumption": "projects.resume_human_review",
     "listLanguages": "languages.list",
     "getCreditBalance": "credits.balance",
     "getConnection": "connection",
     "translateText": "text.translate",
     "listUsage": "usage.list",
+    "listWebhooks": "webhooks.list",
+    "createWebhook": "webhooks.create",
+    "getWebhook": "webhooks.get",
+    "updateWebhook": "webhooks.update",
+    "deleteWebhook": "webhooks.delete",
+    "testWebhook": "webhooks.test",
+    "listWebhookDeliveries": "webhooks.deliveries",
+    "redeliverWebhookDelivery": "webhooks.redeliver",
 }
 
 _HTTP_METHODS = frozenset({"get", "put", "post", "delete", "patch", "head", "options", "trace"})

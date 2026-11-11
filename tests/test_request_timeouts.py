@@ -15,6 +15,7 @@ import pytest
 
 from arbitr import ArbitrClient, AsyncArbitrClient
 from payloads import (
+    balance_json,
     chain_of_custody_json,
     finding_list_json,
     human_review_json,
@@ -35,7 +36,7 @@ def _respond(request: httpx2.Request) -> httpx2.Response:
     if path == "/v1/me":
         return httpx2.Response(200, json={"org_id": "o", "mode": "test", "scopes": []})
     if path == "/v1/credits/balance":
-        return httpx2.Response(200, json={"balance": 1})
+        return httpx2.Response(200, json=balance_json(1))
     if path == "/v1/languages":
         return httpx2.Response(200, json=language_list_json())
     if path == "/v1/projects" and request.method == "GET":
